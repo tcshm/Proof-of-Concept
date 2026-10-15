@@ -1,0 +1,54 @@
+# seed/data/store_overrides.yaml
+# Per-store device status changes on top of the template (template default: online).
+# "since" is an offset from the anchor (the seed run time), e.g. -6h05m.
+#
+# 01234 Chennai: devices behind the mobile mock incidents
+#   INC00001235 POS Terminal 03 - System Offline   (reported 6 h ago)
+#   INC00001236 Register 04 - System Offline       (reported 12 h ago)
+
+stores:
+  "01234":
+    devices:
+      "POS Terminal 03":
+        status: "offline"
+        since: "-6h05m"
+        reason: "POS application error - terminal hardware not responding"
+      "Register 04":
+        status: "offline"
+        since: "-12h05m"
+        reason: "Register application error - device not reachable"
+
+  "01456":
+    devices:
+      "Printer 02":
+        status: "degraded"
+        since: "-3h"
+        reason: "Paper jam reported by printer"
+
+  "02556":
+    # Back-office switch SW02556N303 is down (see event_scenarios.yaml),
+    # so the devices behind it are offline too.
+    devices:
+      "Workstation 01":
+        status: "offline"
+        since: "-3h"
+        reason: "Connected switch SW02556N303 is down"
+      "Workstation 02":
+        status: "offline"
+        since: "-3h"
+        reason: "Connected switch SW02556N303 is down"
+      "RF Gun 04":
+        status: "offline"
+        since: "-2h59m"
+        reason: "Connected access point AP02556N005 is down"
+
+  "03340":
+    devices:
+      "Printer 01":
+        status: "offline"
+        since: "-20h"
+        reason: "Printer powered off"
+      "RF Gun 02":
+        status: "degraded"
+        since: "-1h"
+        reason: "Low battery"

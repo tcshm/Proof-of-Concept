@@ -19,6 +19,7 @@ uv run python -m scripts.db_bootstrap     # role ric_app + ric_poc + ric_poc_tes
 uv run python -m scripts.check_env        # all checks must pass
 uv run alembic upgrade head               # create the 22 tables
 uv run python -m scripts.db_status        # revision and table count must be OK
+uv run python -m scripts.seed all         # load the POC seed data
 uv run pytest                             # tests (use ric_poc_test, never ric_poc)
 ```
 
@@ -33,6 +34,22 @@ uv run pytest                             # tests (use ric_poc_test, never ric_p
 | `uv run alembic upgrade head` | Apply new migrations after pulling changes |
 | `uv run python -m scripts.db_status` | Show revision and table count |
 | `uv run python -m scripts.db_reset --yes` | Drop and recreate all tables (local/test only, data is lost) |
+| `uv run python -m scripts.seed all` | Load or refresh all seed data |
+| `uv run python -m scripts.seed all --reset --yes` | Rebuild the schema, then load all seed data |
+
+## Seed data
+
+- Data files are in `seed/data/` (YAML); the code is in `app/seed/`.
+- `uv run python -m scripts.seed <step>` with step `master`, `inventory`, `events` or `all`.
+  - `master`: 10 stores, assignment groups, network element and device types, prompt versions.
+  - `inventory`: 13 network elements and 17 devices per store, from `inventory_template.yaml`
+    plus `store_overrides.yaml`.
+  - `events`: replaces the 24-hour window of raw Aruba events (all `pending`).
+- Times are offsets from an anchor (the run time, or `--anchor 2026-10-13T09:00:00Z`),
+  so the demo data always looks current.
+- IDs are deterministic (`uuid5`), so every machine gets the same ids for the same data.
+- Store `01234` (Chennai Anna Nagar) carries the scenarios of the mobile app mock data.
+- Safe to run more than once. To change data, edit the YAML files and run the seed again.
 
 ## Database schema
 

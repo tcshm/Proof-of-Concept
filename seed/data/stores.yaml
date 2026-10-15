@@ -1,0 +1,200 @@
+# seed/data/stores.yaml
+# The 10 POC stores. site_code is also the Aruba site id.
+# Store 01234 (Chennai Anna Nagar) carries the scenarios of the mobile app mock data.
+# isp_primary / isp_backup are seed-only values used in WAN link attributes.
+
+stores:
+  - site_code: "01234"
+    name: "Chennai Anna Nagar"
+    region: "India"
+    country_code: "IN"
+    city: "Chennai"
+    address_line: "2nd Avenue, Anna Nagar"
+    postal_code: "600040"
+    latitude: "13.085000"
+    longitude: "80.210100"
+    timezone: "Asia/Kolkata"
+    business_hours: &india_hours
+      mon: [["10:00", "22:00"]]
+      tue: [["10:00", "22:00"]]
+      wed: [["10:00", "22:00"]]
+      thu: [["10:00", "22:00"]]
+      fri: [["10:00", "22:00"]]
+      sat: [["10:00", "22:00"]]
+      sun: [["10:00", "22:00"]]
+    contact_phone: "+91 44 4000 1234"
+    contact_email: "store01234@ric-retail.example"
+    isp_primary: "AT&T"
+    isp_backup: "Airtel"
+
+  - site_code: "01456"
+    name: "Bengaluru Indiranagar"
+    region: "India"
+    country_code: "IN"
+    city: "Bengaluru"
+    address_line: "100 Feet Road, Indiranagar"
+    postal_code: "560038"
+    latitude: "12.978400"
+    longitude: "77.640800"
+    timezone: "Asia/Kolkata"
+    business_hours: *india_hours
+    contact_phone: "+91 80 4000 1456"
+    contact_email: "store01456@ric-retail.example"
+    isp_primary: "Tata Communications"
+    isp_backup: "Airtel"
+
+  - site_code: "01678"
+    name: "Mumbai Bandra"
+    region: "India"
+    country_code: "IN"
+    city: "Mumbai"
+    address_line: "Linking Road, Bandra West"
+    postal_code: "400050"
+    latitude: "19.059600"
+    longitude: "72.829500"
+    timezone: "Asia/Kolkata"
+    business_hours: *india_hours
+    contact_phone: "+91 22 4000 1678"
+    contact_email: "store01678@ric-retail.example"
+    isp_primary: "Jio"
+    isp_backup: "Airtel"
+
+  - site_code: "02112"
+    name: "Berlin Mitte"
+    region: "EU Central"
+    country_code: "DE"
+    city: "Berlin"
+    address_line: "Friedrichstrasse 100"
+    postal_code: "10117"
+    latitude: "52.520000"
+    longitude: "13.405000"
+    timezone: "Europe/Berlin"
+    business_hours: &de_hours
+      mon: [["08:00", "21:00"]]
+      tue: [["08:00", "21:00"]]
+      wed: [["08:00", "21:00"]]
+      thu: [["08:00", "21:00"]]
+      fri: [["08:00", "21:00"]]
+      sat: [["08:00", "21:00"]]
+      sun: []
+    contact_phone: "+49 30 4000 2112"
+    contact_email: "store02112@ric-retail.example"
+    isp_primary: "Deutsche Telekom"
+    isp_backup: "Vodafone"
+
+  - site_code: "02334"
+    name: "Munich Marienplatz"
+    region: "EU Central"
+    country_code: "DE"
+    city: "Munich"
+    address_line: "Kaufingerstrasse 20"
+    postal_code: "80331"
+    latitude: "48.137400"
+    longitude: "11.575500"
+    timezone: "Europe/Berlin"
+    business_hours: *de_hours
+    contact_phone: "+49 89 4000 2334"
+    contact_email: "store02334@ric-retail.example"
+    isp_primary: "Deutsche Telekom"
+    isp_backup: "Vodafone"
+
+  - site_code: "02556"
+    name: "Paris La Defense"
+    region: "EU Central"
+    country_code: "FR"
+    city: "Paris"
+    address_line: "15 Parvis de la Defense"
+    postal_code: "92800"
+    latitude: "48.891900"
+    longitude: "2.238000"
+    timezone: "Europe/Paris"
+    business_hours: &fr_hours
+      mon: [["09:00", "20:30"]]
+      tue: [["09:00", "20:30"]]
+      wed: [["09:00", "20:30"]]
+      thu: [["09:00", "20:30"]]
+      fri: [["09:00", "20:30"]]
+      sat: [["09:00", "20:30"]]
+      sun: []
+    contact_phone: "+33 1 4000 2556"
+    contact_email: "store02556@ric-retail.example"
+    isp_primary: "Orange"
+    isp_backup: "SFR"
+
+  - site_code: "02778"
+    name: "Amsterdam Zuid"
+    region: "EU Central"
+    country_code: "NL"
+    city: "Amsterdam"
+    address_line: "Gustav Mahlerlaan 50"
+    postal_code: "1082 MK"
+    latitude: "52.338300"
+    longitude: "4.872200"
+    timezone: "Europe/Amsterdam"
+    business_hours:
+      mon: [["09:00", "21:00"]]
+      tue: [["09:00", "21:00"]]
+      wed: [["09:00", "21:00"]]
+      thu: [["09:00", "21:00"]]
+      fri: [["09:00", "21:00"]]
+      sat: [["09:00", "21:00"]]
+      sun: [["12:00", "18:00"]]
+    contact_phone: "+31 20 400 2778"
+    contact_email: "store02778@ric-retail.example"
+    isp_primary: "KPN"
+    isp_backup: "Vodafone"
+
+  - site_code: "03118"
+    name: "London Oxford Street"
+    region: "UK & Ireland"
+    country_code: "GB"
+    city: "London"
+    address_line: "300 Oxford Street"
+    postal_code: "W1C 1DX"
+    latitude: "51.515400"
+    longitude: "-0.141900"
+    timezone: "Europe/London"
+    business_hours: &uk_hours
+      mon: [["08:00", "21:00"]]
+      tue: [["08:00", "21:00"]]
+      wed: [["08:00", "21:00"]]
+      thu: [["08:00", "21:00"]]
+      fri: [["08:00", "21:00"]]
+      sat: [["08:00", "21:00"]]
+      sun: [["11:00", "17:00"]]
+    contact_phone: "+44 20 4000 3118"
+    contact_email: "store03118@ric-retail.example"
+    isp_primary: "BT"
+    isp_backup: "Virgin Media"
+
+  - site_code: "03340"
+    name: "Manchester Arndale"
+    region: "UK & Ireland"
+    country_code: "GB"
+    city: "Manchester"
+    address_line: "49 High Street"
+    postal_code: "M4 3AH"
+    latitude: "53.483900"
+    longitude: "-2.240000"
+    timezone: "Europe/London"
+    business_hours: *uk_hours
+    contact_phone: "+44 161 400 3340"
+    contact_email: "store03340@ric-retail.example"
+    isp_primary: "BT"
+    isp_backup: "Virgin Media"
+
+  - site_code: "03562"
+    name: "Dublin Grafton Street"
+    region: "UK & Ireland"
+    country_code: "IE"
+    city: "Dublin"
+    address_line: "80 Grafton Street"
+    postal_code: "D02 VF65"
+    latitude: "53.340900"
+    longitude: "-6.260000"
+    timezone: "Europe/Dublin"
+    business_hours: *uk_hours
+    contact_phone: "+353 1 400 3562"
+    contact_email: "store03562@ric-retail.example"
+    isp_primary: "Eir"
+    isp_backup: "Vodafone"

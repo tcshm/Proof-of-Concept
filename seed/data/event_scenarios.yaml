@@ -1,0 +1,67 @@
+# seed/data/event_scenarios.yaml
+# What happens on the network during the 24-hour window, per store.
+# Times are offsets from the anchor (the seed run time). The window is [-24h, 0].
+#
+# Every Aruba-monitored element (gateway, switches, APs) and every gateway uplink
+# (routers: link state, WAN links: WAN health) reports UP once at baseline_at.
+# Element references use the keys from inventory_template.yaml.
+#
+# 01234 Chennai: network side of the mobile mock incidents
+#   INC00001234 ISP - Primary Link      (reported 1.4 h ago)  -> wan_pri down at -1h30m
+#   INC00001237 Access Point A004 down  (reported 2.2 h ago)  -> ap004 down at -2h20m
+
+baseline_at: "-23h50m"
+client_events_per_ap: [1, 3]
+
+stores:
+  "01234":
+    outages:
+      - element: "wan_pri"
+        down_at: "-1h30m"
+      - element: "ap004"
+        down_at: "-2h20m"
+      - element: "sw302"
+        down_at: "-14h"
+        up_at: "-13h50m"
+    duplicates:
+      # The ap004 DOWN event delivered a second time in a new envelope.
+      - element: "ap004"
+    late_events:
+      # An old UP for ap004 that only arrives after the DOWN.
+      - element: "ap004"
+        status: "up"
+        event_at: "-8h"
+        ingested_at: "-1h"
+
+  "01456":
+    outages:
+      - element: "wan_bkp"
+        down_at: "-6h"
+
+  "02556":
+    outages:
+      - element: "sw303"
+        down_at: "-3h"
+      - element: "ap003"
+        down_at: "-2h59m"
+      - element: "ap005"
+        down_at: "-2h59m"
+
+  "03118":
+    outages:
+      - element: "ap002"
+        down_at: "-9h"
+        up_at: "-8h55m"
+      - element: "ap002"
+        down_at: "-7h"
+        up_at: "-6h58m"
+      - element: "ap002"
+        down_at: "-5h30m"
+        up_at: "-5h20m"
+
+  "03562":
+    unmatched:
+      # An access point Aruba knows about but our inventory does not.
+      - serial: "CN03562AP099"
+        hostname: "AP03562N099"
+        at: "-4h"

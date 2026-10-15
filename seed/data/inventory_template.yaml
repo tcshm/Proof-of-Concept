@@ -1,0 +1,231 @@
+# seed/data/inventory_template.yaml
+# One store layout, applied to every store: 13 network elements and 17 devices.
+#
+# Placeholders in text values:
+#   {site}         store site code, e.g. 01234
+#   {net}          second IP octet for the store (10 + store position in stores.yaml)
+#   {isp_primary}  {isp_backup}   from stores.yaml
+#   {n}            device number 1..count (devices only); use {n:02d} for 01, 02, ...
+#   {h}            10 + n, host part of a device IP (devices only)
+#
+# Network elements reference each other by "key". An element may only reference
+# keys defined ABOVE it, so all elements of a store can be inserted in one statement.
+
+network_elements:
+  - key: "gw"
+    type: "gateway"
+    name: "GW{site}N001"
+    role: "SD-WAN gateway"
+    location: "Comms room"
+    serial: "CN{site}GW001"
+    ip: "10.{net}.0.1"
+    manufacturer: "Aruba"
+    model: "EdgeConnect 9004"
+
+  - key: "sw301"
+    type: "switch"
+    name: "SW{site}N301"
+    role: "Core switch"
+    location: "Comms room"
+    serial: "CN{site}SW301"
+    ip: "10.{net}.0.11"
+    manufacturer: "Aruba"
+    model: "CX 6300M"
+    uplink: "gw"
+    uplink_port: "1"
+
+  - key: "sw302"
+    type: "switch"
+    name: "SW{site}N302"
+    role: "Access switch - front of store"
+    location: "Checkout area"
+    serial: "CN{site}SW302"
+    ip: "10.{net}.0.12"
+    manufacturer: "Aruba"
+    model: "CX 6100"
+    uplink: "sw301"
+    uplink_port: "47"
+
+  - key: "sw303"
+    type: "switch"
+    name: "SW{site}N303"
+    role: "Access switch - back office"
+    location: "Back office"
+    serial: "CN{site}SW303"
+    ip: "10.{net}.0.13"
+    manufacturer: "Aruba"
+    model: "CX 6100"
+    uplink: "sw301"
+    uplink_port: "48"
+
+  - key: "ap001"
+    type: "access_point"
+    name: "AP{site}N001"
+    role: "Wireless access point"
+    location: "Entrance"
+    serial: "CN{site}AP001"
+    ip: "10.{net}.0.21"
+    manufacturer: "Aruba"
+    model: "AP-515"
+    uplink: "sw302"
+    uplink_port: "23"
+
+  - key: "ap002"
+    type: "access_point"
+    name: "AP{site}N002"
+    role: "Wireless access point"
+    location: "Checkout area"
+    serial: "CN{site}AP002"
+    ip: "10.{net}.0.22"
+    manufacturer: "Aruba"
+    model: "AP-515"
+    uplink: "sw302"
+    uplink_port: "24"
+
+  - key: "ap003"
+    type: "access_point"
+    name: "AP{site}N003"
+    role: "Wireless access point"
+    location: "Stockroom"
+    serial: "CN{site}AP003"
+    ip: "10.{net}.0.23"
+    manufacturer: "Aruba"
+    model: "AP-515"
+    uplink: "sw303"
+    uplink_port: "23"
+
+  - key: "ap004"
+    type: "access_point"
+    name: "AP{site}N004"
+    role: "Wireless access point"
+    location: "Sales Floor"
+    serial: "CN{site}AP004"
+    ip: "10.{net}.0.24"
+    manufacturer: "Aruba"
+    model: "AP-515"
+    uplink: "sw301"
+    uplink_port: "11"
+
+  - key: "ap005"
+    type: "access_point"
+    name: "AP{site}N005"
+    role: "Wireless access point"
+    location: "Back office"
+    serial: "CN{site}AP005"
+    ip: "10.{net}.0.25"
+    manufacturer: "Aruba"
+    model: "AP-515"
+    uplink: "sw303"
+    uplink_port: "24"
+
+  - key: "rtr1"
+    type: "router"
+    name: "RN{site}N001-1"
+    role: "Primary ISP router"
+    location: "Comms room"
+    manufacturer: "Cisco"
+    model: "ISR 1111"
+    source_gateway: "gw"
+    source_uplink: "WAN1"
+
+  - key: "rtr2"
+    type: "router"
+    name: "RN{site}N001-2"
+    role: "Backup ISP router"
+    location: "Comms room"
+    manufacturer: "Cisco"
+    model: "ISR 1111"
+    source_gateway: "gw"
+    source_uplink: "WAN2"
+
+  - key: "wan_pri"
+    type: "wan_link"
+    name: "WAN{site}-PRI"
+    role: "Primary ISP link"
+    source_gateway: "gw"
+    source_uplink: "WAN1"
+    attributes:
+      provider: "{isp_primary}"
+      circuit_id: "CKT-{site}-P01"
+      bandwidth_mbps: 200
+
+  - key: "wan_bkp"
+    type: "wan_link"
+    name: "WAN{site}-BKP"
+    role: "Backup ISP link"
+    source_gateway: "gw"
+    source_uplink: "WAN2"
+    attributes:
+      provider: "{isp_backup}"
+      circuit_id: "CKT-{site}-B01"
+      bandwidth_mbps: 50
+
+devices:
+  - type: "pos"
+    name: "POS Terminal {n:02d}"
+    count: 4
+    location: "Checkout {n}"
+    serial: "POS{site}{n:02d}"
+    ip: "10.{net}.120.{h}"
+    connection: "wired"
+    connected_to: "sw302"
+    port_start: 1
+    user_role: "pos-device"
+    vlan: "120"
+    manufacturer: "NCR"
+    model: "RealPOS XR7"
+
+  - type: "register"
+    name: "Register {n:02d}"
+    count: 4
+    location: "Checkout {n}"
+    serial: "REG{site}{n:02d}"
+    ip: "10.{net}.121.{h}"
+    connection: "wired"
+    connected_to: "sw302"
+    port_start: 5
+    user_role: "register-device"
+    vlan: "121"
+    manufacturer: "Toshiba"
+    model: "TCx 800"
+
+  - type: "rf_gun"
+    name: "RF Gun {n:02d}"
+    count: 4
+    location: "Sales Floor"
+    serial: "RFG{site}{n:02d}"
+    ip: "10.{net}.130.{h}"
+    connection: "wireless"
+    connected_to: ["ap001", "ap002", "ap004", "ap005"]
+    user_role: "scanner-device"
+    vlan: "130"
+    manufacturer: "Zebra"
+    model: "MC9300"
+
+  - type: "printer"
+    name: "Printer {n:02d}"
+    count: 3
+    location: "Checkout area"
+    serial: "PRN{site}{n:02d}"
+    ip: "10.{net}.140.{h}"
+    connection: "wired"
+    connected_to: "sw302"
+    port_start: 9
+    user_role: "printer-device"
+    vlan: "140"
+    manufacturer: "HP"
+    model: "LaserJet M507"
+
+  - type: "workstation"
+    name: "Workstation {n:02d}"
+    count: 2
+    location: "Back office"
+    serial: "WKS{site}{n:02d}"
+    ip: "10.{net}.110.{h}"
+    connection: "wired"
+    connected_to: "sw303"
+    port_start: 1
+    user_role: "corp-user"
+    vlan: "110"
+    manufacturer: "Dell"
+    model: "OptiPlex 7010"

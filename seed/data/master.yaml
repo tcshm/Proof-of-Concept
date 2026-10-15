@@ -1,0 +1,76 @@
+# seed/data/master.yaml
+# Reference data shared by every store. Codes are the contract with the frontend.
+# Quote every string that could be read as a number or time (YAML 1.1 rules).
+
+assignment_groups:
+  - name: "Network Ops"
+    description: "WAN, LAN and Wi-Fi operations for stores: ISP links, SD-WAN gateways, routers, switches and access points."
+    email: "network-ops@ric-retail.example"
+  - name: "Retail EUC Ops"
+    description: "End-user computing for stores: POS terminals, registers, RF guns, printers and workstations, including field tech visits."
+    email: "retail-euc-ops@ric-retail.example"
+  - name: "Service Desk"
+    description: "First-line support: takes store calls, logs and triages incidents, and routes them to resolver teams."
+    email: "service-desk@ric-retail.example"
+  - name: "Command Centre"
+    description: "Business command centre: monitors all stores, coordinates major incidents and store communication."
+    email: "command-centre@ric-retail.example"
+
+network_element_types:
+  - code: "wan_link"
+    display_name: "WAN Link"
+    business_criticality: "high"
+    aruba_device_type: null
+    servicenow_ci_class: "cmdb_ci_wan_link"
+    sort_order: 10
+  - code: "gateway"
+    display_name: "Gateway"
+    business_criticality: "high"
+    aruba_device_type: "GATEWAY"
+    servicenow_ci_class: "cmdb_ci_netgear"
+    sort_order: 20
+  - code: "router"
+    display_name: "Router"
+    business_criticality: "high"
+    aruba_device_type: null
+    servicenow_ci_class: "cmdb_ci_ip_router"
+    sort_order: 30
+  - code: "switch"
+    display_name: "Switch"
+    business_criticality: "high"
+    aruba_device_type: "SWITCH"
+    servicenow_ci_class: "cmdb_ci_ip_switch"
+    sort_order: 40
+  - code: "access_point"
+    display_name: "Access Point"
+    business_criticality: "medium"
+    aruba_device_type: "ACCESS POINT"
+    servicenow_ci_class: "cmdb_ci_wap_network"
+    sort_order: 50
+
+device_types:
+  - code: "pos"
+    display_name: "POS"
+    business_criticality: "high"
+    servicenow_ci_class: "cmdb_ci_pos_terminal"
+    sort_order: 10
+  - code: "register"
+    display_name: "Register"
+    business_criticality: "high"
+    servicenow_ci_class: "cmdb_ci_pos_terminal"
+    sort_order: 20
+  - code: "rf_gun"
+    display_name: "RF Gun"
+    business_criticality: "medium"
+    servicenow_ci_class: "cmdb_ci_handheld_computing"
+    sort_order: 30
+  - code: "printer"
+    display_name: "Printer"
+    business_criticality: "medium"
+    servicenow_ci_class: "cmdb_ci_printer"
+    sort_order: 40
+  - code: "workstation"
+    display_name: "Workstation"
+    business_criticality: "low"
+    servicenow_ci_class: "cmdb_ci_computer"
+    sort_order: 50

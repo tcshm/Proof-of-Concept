@@ -1,0 +1,73 @@
+# seed/data/prompts.yaml
+# Version 1 of the two LLM workflow prompts. The text is a PLACEHOLDER;
+# the real prompts are written in Phase 9. output_schema is the agreed contract.
+
+prompts:
+  - workflow: "impact_assessment"
+    version: 1
+    is_active: true
+    model_name: "to-be-confirmed"
+    temperature: "0"
+    created_by: "seed"
+    change_notes: "Placeholder created by the Phase 2 seed."
+    system_prompt: |
+      PLACEHOLDER (v1). You assess the impact of an IT incident on a retail store
+      and write one short alert for the store team. Finalised in Phase 9.
+    user_prompt_template: |
+      PLACEHOLDER (v1). Incident and store context:
+      {context_json}
+    output_schema:
+      type: "object"
+      additionalProperties: false
+      required: ["severity", "title", "detail", "rationale"]
+      properties:
+        severity:
+          type: "string"
+          enum: ["critical", "warning", "info"]
+        title:
+          type: "string"
+          maxLength: 80
+        detail:
+          type: "string"
+          maxLength: 300
+        rationale:
+          type: "string"
+
+  - workflow: "update_classification"
+    version: 1
+    is_active: true
+    model_name: "to-be-confirmed"
+    temperature: "0"
+    created_by: "seed"
+    change_notes: "Placeholder created by the Phase 2 seed."
+    system_prompt: |
+      PLACEHOLDER (v1). You read one incident update written by IT and decide
+      whether the store manager must act, should be informed, or nothing is
+      needed. Finalised in Phase 9.
+    user_prompt_template: |
+      PLACEHOLDER (v1). Incident, store context and the update:
+      {context_json}
+    output_schema:
+      type: "object"
+      additionalProperties: false
+      required: ["decision", "rationale"]
+      properties:
+        decision:
+          type: "string"
+          enum: ["action", "notify", "none"]
+        title:
+          type: "string"
+          maxLength: 80
+        detail:
+          type: "string"
+          maxLength: 300
+        severity:
+          type: "string"
+          enum: ["critical", "warning", "info"]
+        expected_response:
+          type: "string"
+          enum: ["acknowledge", "yes_no", "free_text"]
+        due_by_local:
+          type: ["string", "null"]
+        rationale:
+          type: "string"
