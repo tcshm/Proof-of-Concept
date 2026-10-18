@@ -23,10 +23,31 @@ uv run python -m scripts.seed all         # load the POC seed data
 uv run pytest                             # tests (use ric_poc_test, never ric_poc)
 ```
 
+## Running the API
+
+```powershell
+uv run uvicorn app.main:app --reload      # http://localhost:8000
+```
+
+| URL | Purpose |
+|---|---|
+| `http://localhost:8000/health` | Liveness: the process is running (never touches the database) |
+| `http://localhost:8000/health/ready` | Readiness: 200 when the database answers, 503 when it does not |
+| `http://localhost:8000/docs` | Interactive API documentation (when `DOCS_ENABLED=true`) |
+
+- Business routes live under `/api/v1` (added from Phase 5).
+- Mobile requests identify the store with the `X-Site-Id` header (for example `X-Site-Id: 01234`).
+- Every response carries an `X-Request-ID` header. A client may send its own (a UUID);
+  otherwise the API generates one. Quote it when reporting a problem.
+- Every error has the same shape:
+  `{"error": {"code": "...", "message": "...", "requestId": "...", "details": []}}`.
+- The API starts even if the database is down; `/health/ready` reports 503 until it is back.
+
 ## Day-to-day
 
 | Command | Purpose |
 |---|---|
+| `uv run uvicorn app.main:app --reload` | Run the API locally |
 | `uv run ruff check .` | Lint |
 | `uv run ruff format .` | Format |
 | `uv run pytest` | Run tests |
@@ -63,10 +84,24 @@ uv run pytest                             # tests (use ric_poc_test, never ric_p
   `uv run alembic revision -m "<what changed>" --rev-id 0002` and write the `op.*` calls by hand.
   Do not rely on `--autogenerate`: it does not understand the SQL-defined checks, indexes and triggers.
 
+## Code layout
+
+| Path | Contents |
+|---|---|
+| `app/main.py` | `create_app()` factory and lifespan (engine created at startup, disposed at shutdown) |
+| `app/core/` | Settings, logging, request id middleware, error types and handlers |
+| `app/api/` | Dependencies (`deps.py`), the `/api/v1` router (`router.py`) and route modules (`routes/`) |
+| `app/db/` | Engine, sessions, Alembic helper |
+| `app/models/` | SQLAlchemy models and allowed value lists |
+| `app/seed/` | Seed data loaders and generators |
+
 ## Conventions
 
 - asyncpg is the only PostgreSQL driver. The app connects through SQLAlchemy using `postgresql+asyncpg://`.
 - Configuration is read only through `app.core.config.Settings`. No direct `os.environ` access.
+- Routes never create sessions; they use the `SessionDep` dependency. Services that write call
+  `commit()` themselves; read-only routes never commit.
+- Services raise `app.core.errors` exceptions (`NotFoundError`, `ConflictError`, ...), never HTTP errors.
 - Every script lives in `scripts/`, runs as `uv run python -m scripts.<name>` from the repo root,
   and is safe to run more than once.
 - `.env` is never committed. `.env.example` is the template.

@@ -7,12 +7,17 @@ from collections.abc import AsyncIterator
 
 import pytest
 from alembic import command
+from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.db.migrate import alembic_config
+from app.main import create_app
+
+TEST_CORS_ORIGIN = "http://localhost:8081"
 
 
 @pytest.fixture(scope="session")
@@ -56,3 +61,38 @@ async def db_session(migrated_db: str) -> AsyncIterator[AsyncSession]:
             await session.close()
             await transaction.rollback()
     await engine.dispose()
+
+
+# --- API fixtures (Phase 3) ------------------------------------------------------
+@pytest.fixture
+def test_settings(test_database_url: str) -> Settings:
+    """Settings for an app instance that talks to the test database."""
+    return Settings(
+        _env_file=None,
+        database_url=test_database_url,
+        environment="test",
+        log_level="INFO",
+        log_format="console",
+        cors_origins=TEST_CORS_ORIGIN,
+        docs_enabled=True,
+    )
+
+
+@pytest.fixture
+def app(test_settings: Settings) -> FastAPI:
+    """A fresh app instance. Tests may add test-only routes before starting it."""
+    return create_app(test_settings)
+
+
+@pytest.fixture
+async def client(app: FastAPI) -> AsyncIterator[AsyncClient]:
+    """An HTTP client that calls the app in memory, with the lifespan running.
+
+    httpx's ASGITransport does not run the lifespan itself, so the fixture
+    enters it: the engine and session factory exist for the whole test and the
+    engine is disposed afterwards.
+    """
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as http_client:
+            yield http_client
