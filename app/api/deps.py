@@ -1,8 +1,8 @@
 # app/api/deps.py
 """Shared FastAPI dependencies.
 
-The engine and session factory are created once per process in the lifespan
-and stored on app.state; these dependencies hand them to each request.
+The engine, session factory and clock are created once per process and stored
+on app.state; these dependencies hand them to each request.
 """
 
 from __future__ import annotations
@@ -13,11 +13,16 @@ from typing import Annotated
 from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.clock import Clock
 from app.core.config import Settings
 
 
 def get_app_settings(request: Request) -> Settings:
     return request.app.state.settings
+
+
+def get_clock(request: Request) -> Clock:
+    return request.app.state.clock
 
 
 async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
@@ -38,3 +43,4 @@ async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
 
 SettingsDep = Annotated[Settings, Depends(get_app_settings)]
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
+ClockDep = Annotated[Clock, Depends(get_clock)]

@@ -3,19 +3,24 @@
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import AsyncIterator
+from dataclasses import dataclass, field
+from typing import Any
 
 import pytest
 from alembic import command
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import delete, insert
 from sqlalchemy.engine import make_url
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from app.core.config import Settings, get_settings
 from app.db.migrate import alembic_config
 from app.main import create_app
+from app.models import ApiRequestLog, AuditLog, Store
 
 TEST_CORS_ORIGIN = "http://localhost:8081"
 
@@ -66,7 +71,11 @@ async def db_session(migrated_db: str) -> AsyncIterator[AsyncSession]:
 # --- API fixtures (Phase 3) ------------------------------------------------------
 @pytest.fixture
 def test_settings(test_database_url: str) -> Settings:
-    """Settings for an app instance that talks to the test database."""
+    """Settings for an app instance that talks to the test database.
+
+    The request log is off by default so API tests do not leave rows behind;
+    tests about the request log switch it on (see committed_data).
+    """
     return Settings(
         _env_file=None,
         database_url=test_database_url,
@@ -75,6 +84,7 @@ def test_settings(test_database_url: str) -> Settings:
         log_format="console",
         cors_origins=TEST_CORS_ORIGIN,
         docs_enabled=True,
+        request_log_enabled=False,
     )
 
 
@@ -96,3 +106,64 @@ async def client(app: FastAPI) -> AsyncIterator[AsyncClient]:
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as http_client:
             yield http_client
+
+
+# --- Committed data for API tests (Phase 4) --------------------------------------
+CHENNAI_HOURS = {day: [["10:00", "22:00"]] for day in ("mon", "tue", "wed", "thu", "fri", "sat")}
+CHENNAI_HOURS["sun"] = []
+
+
+@dataclass
+class CommittedData:
+    """Rows the app can see through its own connections.
+
+    The rollback session (db_session) is invisible to the app, which opens its
+    own connections, so API tests commit real rows. Everything inserted here,
+    plus every api_request_log and audit_log row, is deleted after the test.
+    """
+
+    engine: AsyncEngine
+    store_ids: list[uuid.UUID] = field(default_factory=list)
+
+    async def add_store(self, site_code: str, **values: Any) -> uuid.UUID:
+        row = {
+            "id": uuid.uuid4(),
+            "site_code": site_code,
+            "name": f"Test Store {site_code}",
+            "region": "Test Region",
+            "country_code": "IN",
+            "city": "Test City",
+            "timezone": "Asia/Kolkata",
+            "business_hours": CHENNAI_HOURS,
+            **values,
+        }
+        async with self.engine.begin() as connection:
+            await connection.execute(insert(Store).values(**row))
+        self.store_ids.append(row["id"])
+        return row["id"]
+
+    async def cleanup(self) -> None:
+        async with self.engine.begin() as connection:
+            await connection.execute(delete(ApiRequestLog))
+            await connection.execute(delete(AuditLog))
+            if self.store_ids:
+                await connection.execute(delete(Store).where(Store.id.in_(self.store_ids)))
+
+
+@pytest.fixture
+async def committed_data(migrated_db: str) -> AsyncIterator[CommittedData]:
+    engine = create_async_engine(migrated_db, poolclass=NullPool)
+    data = CommittedData(engine=engine)
+    try:
+        yield data
+    finally:
+        await data.cleanup()
+        await engine.dispose()
+
+
+@pytest.fixture
+async def chennai(committed_data: CommittedData) -> uuid.UUID:
+    """Store 01234, Chennai, open Mon-Sat 10:00-22:00 IST, closed on Sunday."""
+    return await committed_data.add_store(
+        "01234", name="Chennai Anna Nagar", region="India", city="Chennai"
+    )

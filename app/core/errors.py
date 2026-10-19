@@ -93,7 +93,7 @@ def unhandled_error_response() -> JSONResponse:
 
 async def app_error_handler(request: Request, exc: Exception) -> JSONResponse:
     assert isinstance(exc, AppError)
-    return error_response(exc.status_code, exc.code, exc.message, exc.details)
+    return _respond(request, exc.status_code, exc.code, exc.message, exc.details)
 
 
 async def validation_error_handler(request: Request, exc: Exception) -> JSONResponse:
@@ -106,7 +106,7 @@ async def validation_error_handler(request: Request, exc: Exception) -> JSONResp
         }
         for error in exc.errors()
     ]
-    return error_response(422, "validation_error", "The request is not valid.", details)
+    return _respond(request, 422, "validation_error", "The request is not valid.", details)
 
 
 async def http_exception_handler(request: Request, exc: Exception) -> JSONResponse:
@@ -116,7 +116,19 @@ async def http_exception_handler(request: Request, exc: Exception) -> JSONRespon
         message = exc.detail
     else:
         message = HTTPStatus(exc.status_code).phrase
-    return error_response(exc.status_code, code, message, headers=exc.headers)
+    return _respond(request, exc.status_code, code, message, headers=exc.headers)
+
+
+def _respond(
+    request: Request,
+    status_code: int,
+    code: str,
+    message: str,
+    details: list[dict[str, Any]] | None = None,
+    headers: dict[str, str] | None = None,
+) -> JSONResponse:
+    request.state.error_code = code
+    return error_response(status_code, code, message, details, headers)
 
 
 def register_exception_handlers(app: FastAPI) -> None:

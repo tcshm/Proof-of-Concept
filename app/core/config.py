@@ -34,6 +34,9 @@ class Settings(BaseSettings):
 
     docs_enabled: bool = True
 
+    # Write one api_request_log row per API request (health, docs and OPTIONS are skipped).
+    request_log_enabled: bool = True
+
     @field_validator("database_url")
     @classmethod
     def _require_asyncpg(cls, value: str) -> str:

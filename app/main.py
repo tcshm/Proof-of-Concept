@@ -21,15 +21,17 @@ from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from app.api.context import SITE_ID_HEADER, USER_HEADER
 from app.api.router import API_PREFIX, api_router
 from app.api.routes import health
+from app.core.clock import SystemClock
 from app.core.config import Settings, get_settings
 from app.core.errors import register_exception_handlers
 from app.core.logging import configure_logging
 from app.core.request_context import REQUEST_ID_HEADER, RequestContextMiddleware
+from app.core.request_log import CLIENT_APP_HEADER
 from app.db.session import create_engine_from_settings, create_session_factory
 
-SITE_ID_HEADER = "X-Site-Id"
 STARTUP_DB_CHECK_SECONDS = 3.0
 
 logger = logging.getLogger("app.main")
@@ -83,6 +85,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         openapi_url="/openapi.json" if settings.docs_enabled else None,
     )
     app.state.settings = settings
+    app.state.clock = SystemClock()
 
     register_exception_handlers(app)
 
@@ -95,7 +98,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             CORSMiddleware,
             allow_origins=settings.cors_origin_list,
             allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-            allow_headers=["Content-Type", "Authorization", REQUEST_ID_HEADER, SITE_ID_HEADER],
+            allow_headers=[
+                "Content-Type",
+                "Authorization",
+                REQUEST_ID_HEADER,
+                SITE_ID_HEADER,
+                USER_HEADER,
+                CLIENT_APP_HEADER,
+            ],
             expose_headers=[REQUEST_ID_HEADER],
             max_age=600,
         )

@@ -4,6 +4,10 @@
 One process serves many requests concurrently, so per-request values must never
 live in globals or on app.state. A ContextVar holds a separate value for each
 request, even while requests overlap on the event loop.
+
+Values that route dependencies discover during the request (site code, actor,
+error code) are put on request.state; the middleware reads them at the end to
+write the log line and the api_request_log row.
 """
 
 from __future__ import annotations
@@ -51,6 +55,7 @@ class RequestContextMiddleware:
     3. adds it to the response headers,
     4. turns any unhandled exception into the standard 500 error response,
     5. logs one line when the request finishes (method, path, status, duration).
+    6. writes one api_request_log row after the response has been sent.
     """
 
     def __init__(self, app: ASGIApp) -> None:
@@ -61,10 +66,11 @@ class RequestContextMiddleware:
             await self.app(scope, receive, send)
             return
 
-        incoming = Headers(scope=scope).get(REQUEST_ID_HEADER)
-        request_id = _accept_request_id(incoming) or str(uuid.uuid4())
+        headers = Headers(scope=scope)
+        request_id = _accept_request_id(headers.get(REQUEST_ID_HEADER)) or str(uuid.uuid4())
         token = _request_id.set(request_id)
-        scope.setdefault("state", {})["request_id"] = request_id
+        state = scope.setdefault("state", {})
+        state["request_id"] = request_id
 
         started = time.perf_counter()
         status_code = 500
@@ -90,6 +96,7 @@ class RequestContextMiddleware:
             # Imported here to avoid a circular import (errors.py reads the request id).
             from app.core.errors import unhandled_error_response
 
+            state["error_code"] = "internal_error"
             await unhandled_error_response()(scope, receive, send_with_request_id)
         finally:
             duration_ms = round((time.perf_counter() - started) * 1000, 1)
@@ -110,4 +117,44 @@ class RequestContextMiddleware:
                     "durationMs": duration_ms,
                 },
             )
+            await _write_request_log(scope, headers, request_id, status_code, duration_ms)
             _request_id.reset(token)
+
+
+async def _write_request_log(
+    scope: Scope, headers: Headers, request_id: str, status_code: int, duration_ms: float
+) -> None:
+    # Imported here: request_log imports the models, which this module must not
+    # load at import time (logging.py imports this module very early).
+    from app.core.request_log import (
+        CLIENT_APP_HEADER,
+        RequestLogEntry,
+        client_app_from_header,
+        route_template,
+        should_log,
+        write_request_log,
+    )
+
+    app = scope.get("app")
+    app_state = getattr(app, "state", None)
+    settings = getattr(app_state, "settings", None)
+    factory = getattr(app_state, "session_factory", None)
+    if settings is None or factory is None or not settings.request_log_enabled:
+        return
+    if not should_log(scope["method"], scope["path"]):
+        return
+
+    state = scope.get("state", {})
+    entry = RequestLogEntry(
+        request_id=request_id,
+        client_app=client_app_from_header(headers.get(CLIENT_APP_HEADER)),
+        method=scope["method"],
+        path=scope["path"],
+        route=route_template(scope),
+        site_code=state.get("site_code"),
+        actor=state.get("actor"),
+        status_code=status_code,
+        duration_ms=round(duration_ms),
+        error_code=state.get("error_code"),
+    )
+    await write_request_log(factory, entry)
