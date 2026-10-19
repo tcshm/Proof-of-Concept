@@ -6,6 +6,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -20,7 +21,22 @@ from sqlalchemy.pool import NullPool
 from app.core.config import Settings, get_settings
 from app.db.migrate import alembic_config
 from app.main import create_app
-from app.models import ApiRequestLog, AuditLog, Store
+from app.models import (
+    AiPromptVersion,
+    ApiRequestLog,
+    AssignmentGroup,
+    AuditLog,
+    Device,
+    DeviceType,
+    EventProcessingRun,
+    Incident,
+    NetworkElement,
+    NetworkElementCurrentStatus,
+    NetworkElementType,
+    NetworkEvent,
+    RawNetworkEvent,
+    Store,
+)
 
 TEST_CORS_ORIGIN = "http://localhost:8081"
 
@@ -167,3 +183,57 @@ async def chennai(committed_data: CommittedData) -> uuid.UUID:
     return await committed_data.add_store(
         "01234", name="Chennai Anna Nagar", region="India", city="Chennai"
     )
+
+
+# --- Committed, fully seeded and processed database (Phase 5) --------------------
+SEED_ANCHOR = datetime(2026, 10, 13, 9, 0, tzinfo=UTC)
+
+# Every table the seed and the processor write, in an order that respects the
+# foreign keys when deleting.
+_SEEDED_TABLES_DELETE_ORDER = (
+    ApiRequestLog,
+    AuditLog,
+    Incident,
+    NetworkElementCurrentStatus,
+    NetworkEvent,
+    RawNetworkEvent,
+    EventProcessingRun,
+    Device,
+    NetworkElement,
+    AiPromptVersion,
+    DeviceType,
+    NetworkElementType,
+    AssignmentGroup,
+    Store,
+)
+
+
+async def _delete_seeded_tables(engine: AsyncEngine) -> None:
+    async with engine.begin() as connection:
+        for model in _SEEDED_TABLES_DELETE_ORDER:
+            await connection.execute(delete(model))
+
+
+@pytest.fixture
+async def seeded_engine(migrated_db: str) -> AsyncIterator[AsyncEngine]:
+    """The Phase 2 seed (all 10 stores) plus a network processing run, committed
+    so the app can read it. The tables are emptied again after the test.
+
+    Use with the "client" fixture for API tests on the seeded data.
+    """
+    # Imported here so test modules that do not use this fixture stay light.
+    from app.seed.loader import load_seed_data
+    from app.seed.runner import STEP_ORDER, STEPS
+
+    engine = create_async_engine(migrated_db, poolclass=NullPool)
+    await _delete_seeded_tables(engine)
+    data = load_seed_data()
+    async with AsyncSession(engine, expire_on_commit=False) as session:
+        for name in STEP_ORDER:
+            await STEPS[name](session, data, SEED_ANCHOR)
+        await session.commit()
+    try:
+        yield engine
+    finally:
+        await _delete_seeded_tables(engine)
+        await engine.dispose()

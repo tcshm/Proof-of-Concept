@@ -19,7 +19,7 @@ uv run python -m scripts.db_bootstrap     # role ric_app + ric_poc + ric_poc_tes
 uv run python -m scripts.check_env        # all checks must pass
 uv run alembic upgrade head               # create the 22 tables
 uv run python -m scripts.db_status        # revision and table count must be OK
-uv run python -m scripts.seed all         # load the POC seed data
+uv run python -m scripts.seed all         # load the POC seed data and process the network events
 uv run pytest                             # tests (use ric_poc_test, never ric_poc)
 ```
 
@@ -34,10 +34,20 @@ uv run uvicorn app.main:app --reload      # http://localhost:8000
 | `http://localhost:8000/health` | Liveness: the process is running (never touches the database) |
 | `http://localhost:8000/health/ready` | Readiness: 200 when the database answers, 503 when it does not |
 | `http://localhost:8000/docs` | Interactive API documentation (when `DOCS_ENABLED=true`) |
-| `http://localhost:8000/api/v1/store` | The store named by `X-Site-Id` (name, timezone, local time, open now) |
+
+### Mobile routes (all need `X-Site-Id`)
+
+| Route | Returns |
+|---|---|
+| `GET /api/v1/store` | The store: name, timezone, local time, open now |
+| `GET /api/v1/network` | Routers and switches (`wiredTiles`), WAN links, wired connections, access points with open incidents |
+| `GET /api/v1/devices` | One tile per device type: colour, total, online |
+| `GET /api/v1/devices/{deviceType}` | The devices of one type (e.g. `pos`, `rf_gun`), problems first |
 
 - Business routes live under `/api/v1`.
 - The API starts even if the database is down; `/health/ready` reports 503 until it is back.
+- Every element and device carries `status` (colour: `green`, `yellow`, `red`) and
+  `connectivity` (`online`, `degraded`, `unknown`, `offline`).
 
 ### Request headers
 
@@ -59,6 +69,27 @@ user's token, and only `app/api/context.py` changes.
 - Every error has the same shape:
   `{"error": {"code": "...", "message": "...", "requestId": "...", "details": []}}`.
 
+## Network event processing
+
+Raw Aruba events (`raw_network_events`) are turned into `network_events` (typed history) and
+`network_element_current_status` (one row per element: the status the `/network` screen shows).
+
+```powershell
+uv run python -m scripts.process_events                 # process pending events
+uv run python -m scripts.process_events --rebuild       # clear and replay everything
+uv run python -m scripts.process_events --rebuild --as-of 2026-10-13T09:00:00Z
+```
+
+- Events are processed in arrival order (`ingestion_time`). Only events that arrived by `--as-of`
+  (default: now) are processed.
+- An event changes an element's status only if it is newer (by event time) than the newest
+  status already applied; late, older events are stored with `status_applied = false`.
+- Duplicates (same Aruba event id), unknown sites and unknown elements are recorded on the raw row
+  (`duplicate`, `unmatched`); malformed payloads are marked `error` and do not stop the run.
+- Every run is recorded in `event_processing_runs`. Two runs never overlap (advisory lock).
+- `scripts.seed all` runs the processor as its last step (`network`).
+- The Aruba payload format lives only in `app/processing/aruba.py`.
+
 ## Day-to-day
 
 | Command | Purpose |
@@ -71,18 +102,20 @@ user's token, and only `app/api/context.py` changes.
 | `uv run alembic upgrade head` | Apply new migrations after pulling changes |
 | `uv run python -m scripts.db_status` | Show revision and table count |
 | `uv run python -m scripts.db_reset --yes` | Drop and recreate all tables (local/test only, data is lost) |
-| `uv run python -m scripts.seed all` | Load or refresh all seed data |
+| `uv run python -m scripts.seed all` | Load or refresh all seed data, then process the network events |
 | `uv run python -m scripts.seed all --reset --yes` | Rebuild the schema, then load all seed data |
+| `uv run python -m scripts.process_events --rebuild` | Rebuild the network status from the raw events |
 | `uv run python -m scripts.request_log_tail` | Show the last API requests (`-n 50`, `--site 01234`) |
 
 ## Seed data
 
 - Data files are in `seed/data/` (YAML); the code is in `app/seed/`.
-- `uv run python -m scripts.seed <step>` with step `master`, `inventory`, `events` or `all`.
+- `uv run python -m scripts.seed <step>` with step `master`, `inventory`, `events`, `network` or `all`.
   - `master`: 10 stores, assignment groups, network element and device types, prompt versions.
   - `inventory`: 13 network elements and 17 devices per store, from `inventory_template.yaml`
     plus `store_overrides.yaml`.
   - `events`: replaces the 24-hour window of raw Aruba events (all `pending`).
+  - `network`: runs the event processor (`--rebuild`, as of the anchor).
 - Times are offsets from an anchor (the run time, or `--anchor 2026-10-13T09:00:00Z`),
   so the demo data always looks current.
 - IDs are deterministic (`uuid5`), so every machine gets the same ids for the same data.
@@ -106,8 +139,10 @@ user's token, and only `app/api/context.py` changes.
 | Path | Contents |
 |---|---|
 | `app/main.py` | `create_app()` factory and lifespan (engine created at startup, disposed at shutdown) |
-| `app/core/` | Settings, logging, request id middleware, request log, errors, clock, time formatting, actor |
+| `app/core/` | Settings, logging, request id middleware, request log, errors, clock, time formatting, actor, status colours |
 | `app/api/` | Dependencies (`deps.py`, `context.py`), the `/api/v1` router, schemas and route modules |
+| `app/queries/` | Read-side SQL for the API, one module per screen, always filtered by store |
+| `app/processing/` | Network event processor: Aruba extractors, matching, status rules, runs |
 | `app/services/` | Business services (the only code that writes business tables); `audit.py` |
 | `app/db/` | Engine, sessions, Alembic helper |
 | `app/models/` | SQLAlchemy models and allowed value lists |
@@ -119,6 +154,8 @@ user's token, and only `app/api/context.py` changes.
 - Configuration is read only through `app.core.config.Settings`. No direct `os.environ` access.
 - Nothing calls `datetime.now()` directly: routes use `ClockDep`, services receive the time or a clock.
 - Mobile routes take the store from `StoreDep` and filter every query by `store.id`.
+- Routes never write SQL: read queries live in `app/queries/`, writes in `app/services/`.
+  A route uses a handful of queries in total, never one query per row.
 - Routes never create sessions; they use the `SessionDep` dependency. Services that write call
   `commit()` themselves; read-only routes never commit.
 - Services receive an `ActorContext`, write an audit row with `record_audit()` in the same

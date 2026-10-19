@@ -13,6 +13,7 @@ from app.models import (
     AiPromptVersion,
     Device,
     NetworkElement,
+    NetworkElementCurrentStatus,
     RawNetworkEvent,
     Store,
 )
@@ -40,12 +41,14 @@ async def test_seed_all_writes_expected_rows(db_session: AsyncSession) -> None:
     assert await _count(db_session, AiPromptVersion) == 2
     raw = await _count(db_session, RawNetworkEvent)
     assert 150 <= raw <= 400
+    # The network step processed the window: nothing is left pending.
     pending = await db_session.scalar(
         select(func.count())
         .select_from(RawNetworkEvent)
         .where(RawNetworkEvent.processing_status == "pending")
     )
-    assert pending == raw
+    assert pending == 0
+    assert await _count(db_session, NetworkElementCurrentStatus) == 130
 
 
 async def test_seed_is_idempotent(db_session: AsyncSession) -> None:
@@ -80,3 +83,5 @@ async def test_steps_check_their_dependencies(db_session: AsyncSession) -> None:
     await STEPS["master"](db_session, data, ANCHOR)
     with pytest.raises(SeedDependencyError, match="scripts.seed inventory"):
         await STEPS["events"](db_session, data, ANCHOR)
+    with pytest.raises(SeedDependencyError, match="scripts.seed events"):
+        await STEPS["network"](db_session, data, ANCHOR)

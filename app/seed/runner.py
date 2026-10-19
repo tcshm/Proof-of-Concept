@@ -10,7 +10,9 @@ from datetime import datetime
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import DeviceType, NetworkElement, NetworkElementType, Store
+from app.models import DeviceType, NetworkElement, NetworkElementType, RawNetworkEvent, Store
+from app.models.values import ProcessingRunMode
+from app.processing.runner import run_processor
 from app.seed import ids
 from app.seed.events import generate_events, write_events
 from app.seed.inventory import build_inventory, write_inventory
@@ -75,11 +77,27 @@ async def seed_events(session: AsyncSession, data: SeedData, anchor: datetime) -
     return f"{len(events)} raw events (window ends {anchor.isoformat()})"
 
 
+async def seed_network(session: AsyncSession, data: SeedData, anchor: datetime) -> str:
+    """Rebuild network_events and the current status from the raw window."""
+    raw = await session.scalar(select(func.count()).select_from(RawNetworkEvent))
+    await _require(session, "raw network events", raw or 0, 1, "events")
+
+    _, counts = await run_processor(
+        session, mode=ProcessingRunMode.REBUILD, as_of=anchor, triggered_by="seed"
+    )
+    return (
+        f"{counts.events_processed} processed, {counts.duplicates} duplicate, "
+        f"{counts.unmatched} unmatched, {counts.errors} errors, "
+        f"{counts.status_changes} status changes"
+    )
+
+
 Step = Callable[[AsyncSession, SeedData, datetime], Awaitable[str]]
 
 STEPS: dict[str, Step] = {
     "master": seed_master,
     "inventory": seed_inventory,
     "events": seed_events,
+    "network": seed_network,
 }
-STEP_ORDER = ("master", "inventory", "events")
+STEP_ORDER = ("master", "inventory", "events", "network")
