@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -23,19 +23,27 @@ from app.db.migrate import alembic_config
 from app.main import create_app
 from app.models import (
     AiPromptVersion,
+    AiWorkflowRun,
     ApiRequestLog,
+    Appointment,
     AssignmentGroup,
     AuditLog,
     Device,
     DeviceType,
     EventProcessingRun,
     Incident,
+    IncidentJournal,
     NetworkElement,
     NetworkElementCurrentStatus,
     NetworkElementType,
     NetworkEvent,
+    Notification,
+    NotificationTarget,
     RawNetworkEvent,
     Store,
+    StoreAction,
+    StoreActionResponse,
+    StoreAlert,
 )
 
 TEST_CORS_ORIGIN = "http://localhost:8081"
@@ -185,14 +193,27 @@ async def chennai(committed_data: CommittedData) -> uuid.UUID:
     )
 
 
-# --- Committed, fully seeded and processed database (Phase 5) --------------------
+# --- Committed, seeded databases (Phase 5 and 6) ---------------------------------
+# Phase 5 tests use SEED_ANCHOR (14:30 IST) with the network steps only.
+# Phase 6 tests use ITSM_ANCHOR (09:00 IST, Chennai morning) with every step, so
+# the Chennai appointments are "Today at 12:00 PM / 1:00 PM / 2:00 PM" as in the mock.
 SEED_ANCHOR = datetime(2026, 10, 13, 9, 0, tzinfo=UTC)
+ITSM_ANCHOR = datetime(2026, 10, 13, 3, 30, tzinfo=UTC)
+NETWORK_STEPS = ("master", "inventory", "events", "network")
 
-# Every table the seed and the processor write, in an order that respects the
-# foreign keys when deleting.
+# Every table the seed, the processor and the services write, in an order that
+# respects the foreign keys when deleting.
 _SEEDED_TABLES_DELETE_ORDER = (
     ApiRequestLog,
     AuditLog,
+    NotificationTarget,
+    Notification,
+    StoreActionResponse,
+    StoreAction,
+    StoreAlert,
+    AiWorkflowRun,
+    Appointment,
+    IncidentJournal,
     Incident,
     NetworkElementCurrentStatus,
     NetworkEvent,
@@ -214,26 +235,40 @@ async def _delete_seeded_tables(engine: AsyncEngine) -> None:
             await connection.execute(delete(model))
 
 
-@pytest.fixture
-async def seeded_engine(migrated_db: str) -> AsyncIterator[AsyncEngine]:
-    """The Phase 2 seed (all 10 stores) plus a network processing run, committed
-    so the app can read it. The tables are emptied again after the test.
-
-    Use with the "client" fixture for API tests on the seeded data.
-    """
-    # Imported here so test modules that do not use this fixture stay light.
+async def _seeded(
+    migrated_db: str, steps: Sequence[str], anchor: datetime
+) -> AsyncIterator[AsyncEngine]:
+    # Imported here so test modules that do not use these fixtures stay light.
     from app.seed.loader import load_seed_data
-    from app.seed.runner import STEP_ORDER, STEPS
+    from app.seed.runner import STEPS
 
     engine = create_async_engine(migrated_db, poolclass=NullPool)
     await _delete_seeded_tables(engine)
     data = load_seed_data()
     async with AsyncSession(engine, expire_on_commit=False) as session:
-        for name in STEP_ORDER:
-            await STEPS[name](session, data, SEED_ANCHOR)
+        for name in steps:
+            await STEPS[name](session, data, anchor)
         await session.commit()
     try:
         yield engine
     finally:
         await _delete_seeded_tables(engine)
         await engine.dispose()
+
+
+@pytest.fixture
+async def seeded_engine(migrated_db: str) -> AsyncIterator[AsyncEngine]:
+    """Phase 5: the Phase 2 seed (all 10 stores) plus a network processing run,
+    committed so the app can read it. Emptied again after the test."""
+    async for engine in _seeded(migrated_db, NETWORK_STEPS, SEED_ANCHOR):
+        yield engine
+
+
+@pytest.fixture
+async def itsm_engine(migrated_db: str) -> AsyncIterator[AsyncEngine]:
+    """Phase 6: every seed step including incidents, journal and appointments,
+    anchored at ITSM_ANCHOR. Emptied again after the test."""
+    from app.seed.runner import STEP_ORDER
+
+    async for engine in _seeded(migrated_db, STEP_ORDER, ITSM_ANCHOR):
+        yield engine

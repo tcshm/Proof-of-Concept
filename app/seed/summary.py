@@ -8,9 +8,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
     AiPromptVersion,
+    Appointment,
     AssignmentGroup,
     Device,
     DeviceType,
+    Incident,
+    IncidentJournal,
     NetworkElement,
     NetworkElementType,
     RawNetworkEvent,
@@ -26,6 +29,9 @@ _TABLES = (
     NetworkElement,
     Device,
     RawNetworkEvent,
+    Incident,
+    IncidentJournal,
+    Appointment,
 )
 
 
@@ -73,4 +79,16 @@ async def collect_summary(session: AsyncSession) -> list[str]:
     ).all()
     for event_type, status, count in rows:
         lines.append(f"  {event_type:<26} {status:<10} {count:>5}")
+
+    lines.append("")
+    lines.append("Journal entries by element and process status:")
+    journal = (
+        await session.execute(
+            select(IncidentJournal.element, IncidentJournal.process_status, func.count())
+            .group_by(IncidentJournal.element, IncidentJournal.process_status)
+            .order_by(IncidentJournal.element)
+        )
+    ).all()
+    for element, status, count in journal:
+        lines.append(f"  {element:<26} {status:<10} {count:>5}")
     return lines

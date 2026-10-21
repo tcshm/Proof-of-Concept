@@ -17,9 +17,9 @@ uv sync                                   # create .venv from uv.lock
 Copy-Item .env.example .env               # then fill in passwords
 uv run python -m scripts.db_bootstrap     # role ric_app + ric_poc + ric_poc_test
 uv run python -m scripts.check_env        # all checks must pass
-uv run alembic upgrade head               # create the 22 tables
+uv run alembic upgrade head               # create the 22 tables (revisions 0001-0002)
 uv run python -m scripts.db_status        # revision and table count must be OK
-uv run python -m scripts.seed all         # load the POC seed data and process the network events
+uv run python -m scripts.seed all         # load the POC seed data (network + ITSM)
 uv run pytest                             # tests (use ric_poc_test, never ric_poc)
 ```
 
@@ -43,11 +43,20 @@ uv run uvicorn app.main:app --reload      # http://localhost:8000
 | `GET /api/v1/network` | Routers and switches (`wiredTiles`), WAN links, wired connections, access points with open incidents |
 | `GET /api/v1/devices` | One tile per device type: colour, total, online |
 | `GET /api/v1/devices/{deviceType}` | The devices of one type (e.g. `pos`, `rf_gun`), problems first |
+| `GET /api/v1/incidents` | The store's active incidents (states 1-3), highest severity first, then newest |
+| `GET /api/v1/incidents/{number}` | One incident (any state) with its store-visible comments |
+| `GET /api/v1/appointments` | Upcoming visits (scheduled or in progress, not yet over), soonest first |
 
 - Business routes live under `/api/v1`.
 - The API starts even if the database is down; `/health/ready` reports 503 until it is back.
 - Every element and device carries `status` (colour: `green`, `yellow`, `red`) and
   `connectivity` (`online`, `degraded`, `unknown`, `offline`).
+- Incident `id` is the incident number (`INC00001234`). `ciType` and `appointmentType` replace the
+  mock's icons; the frontend maps them to icons.
+- Incident display rules (`app/api/mappers/incidents.py`): severity from priority (1-2 high,
+  3 medium, 4-5 low); badge from the hold reason when on hold (`Pending Site Visit`, ...), otherwise
+  `Open`; summary is the latest comment written by IT staff, otherwise the description;
+  `resolutionETA` is the ETA in store time (`Today 2PM IST`), otherwise the ETA note.
 
 ### Request headers
 
@@ -69,6 +78,24 @@ user's token, and only `app/api/context.py` changes.
 - Every error has the same shape:
   `{"error": {"code": "...", "message": "...", "requestId": "...", "details": []}}`.
 
+## ITSM: incidents, journal and appointments
+
+- `app/services/incidents.py` is the only code that writes incidents and journal entries:
+  `create_incident`, `add_journal_entry`, `update_incident`, `resolve_incident`, `close_incident`,
+  `cancel_incident`. `app/services/appointments.py` is the only code that writes appointments.
+- Every write locks the incident row, checks the rules, writes the change with its journal entries
+  and audit rows, and commits once (or only flushes with `commit=False`, used by seeds and tests).
+- State changes: New, In Progress and On Hold move between each other and to Resolved or Canceled;
+  Resolved can only be Closed; Closed and Canceled are final (no reopening in the POC).
+- The journal is also the worker's queue. Pending: the system "Incident created." entry and every
+  work note or comment by IT staff (resolving writes the close notes as a pending work note).
+  Skipped: store users' replies and entries by the agent or the system.
+- Resolving closes the store alert; open actions stay open. Closing or cancelling also closes
+  the actions and cancels the incident's scheduled appointments.
+- Every appointment is tagged to an active incident of the same store (`incident_id` is NOT NULL
+  since revision `0002`); appointments come from the admin portal.
+- New incident numbers come from the `incident_number_seq` sequence (from `INC00002000`).
+
 ## Network event processing
 
 Raw Aruba events (`raw_network_events`) are turned into `network_events` (typed history) and
@@ -87,7 +114,6 @@ uv run python -m scripts.process_events --rebuild --as-of 2026-10-13T09:00:00Z
 - Duplicates (same Aruba event id), unknown sites and unknown elements are recorded on the raw row
   (`duplicate`, `unmatched`); malformed payloads are marked `error` and do not stop the run.
 - Every run is recorded in `event_processing_runs`. Two runs never overlap (advisory lock).
-- `scripts.seed all` runs the processor as its last step (`network`).
 - The Aruba payload format lives only in `app/processing/aruba.py`.
 
 ## Day-to-day
@@ -102,36 +128,45 @@ uv run python -m scripts.process_events --rebuild --as-of 2026-10-13T09:00:00Z
 | `uv run alembic upgrade head` | Apply new migrations after pulling changes |
 | `uv run python -m scripts.db_status` | Show revision and table count |
 | `uv run python -m scripts.db_reset --yes` | Drop and recreate all tables (local/test only, data is lost) |
-| `uv run python -m scripts.seed all` | Load or refresh all seed data, then process the network events |
+| `uv run python -m scripts.seed all` | Load or refresh all seed data (network and ITSM) |
 | `uv run python -m scripts.seed all --reset --yes` | Rebuild the schema, then load all seed data |
+| `uv run python -m scripts.seed itsm` | Reset incidents, journal entries and appointments only |
 | `uv run python -m scripts.process_events --rebuild` | Rebuild the network status from the raw events |
 | `uv run python -m scripts.request_log_tail` | Show the last API requests (`-n 50`, `--site 01234`) |
 
 ## Seed data
 
 - Data files are in `seed/data/` (YAML); the code is in `app/seed/`.
-- `uv run python -m scripts.seed <step>` with step `master`, `inventory`, `events`, `network` or `all`.
+- `uv run python -m scripts.seed <step>` with step `master`, `inventory`, `events`, `network`,
+  `itsm` or `all`.
   - `master`: 10 stores, assignment groups, network element and device types, prompt versions.
   - `inventory`: 13 network elements and 17 devices per store, from `inventory_template.yaml`
     plus `store_overrides.yaml`.
   - `events`: replaces the 24-hour window of raw Aruba events (all `pending`).
   - `network`: runs the event processor (`--rebuild`, as of the anchor).
+  - `itsm`: replaces incidents (`incidents.yaml`), their journal entries (all `pending`, for the
+    worker) and appointments (`appointments.yaml`), and clears anything derived from them
+    (alerts, actions, AI runs, incident and appointment notifications).
 - Times are offsets from an anchor (the run time, or `--anchor 2026-10-13T09:00:00Z`),
-  so the demo data always looks current.
+  so the demo data always looks current. Appointment times and firm ETAs are store-local clock
+  times (e.g. 12:00 IST): today, or tomorrow if that time has already passed when the seed runs.
 - IDs are deterministic (`uuid5`), so every machine gets the same ids for the same data.
-- Store `01234` (Chennai Anna Nagar) carries the scenarios of the mobile app mock data.
+- Store `01234` (Chennai Anna Nagar) carries the scenarios of the mobile app mock data: incidents
+  INC00001234-INC00001237 and appointments apt-001 to apt-003. Seed it in the Chennai morning to
+  see the visits as "Today at 12:00 PM / 1:00 PM / 2:00 PM", exactly as in the mock.
 - Safe to run more than once. To change data, edit the YAML files and run the seed again.
 
 ## Database schema
 
 - The schema is defined in plain SQL in `migrations/sql/` and applied by Alembic revisions in
-  `migrations/versions/`. `0001` creates the full POC schema (22 tables).
+  `migrations/versions/`. `0001` creates the full POC schema (22 tables); `0002` adds the incident
+  number sequence and makes `appointments.incident_id` required.
 - Models in `app/models/` describe columns and keys only. CHECK constraints, partial indexes and
   triggers live in the database. `tests/test_models_match_db.py` fails if models and database differ.
 - Allowed values for constrained text columns are in `app/models/values.py`.
   `tests/test_values_match_db.py` fails if they differ from the database.
 - New schema changes: add a new revision with
-  `uv run alembic revision -m "<what changed>" --rev-id 0002` and write the `op.*` calls by hand.
+  `uv run alembic revision -m "<what changed>" --rev-id 0003` and write the `op.*` calls by hand.
   Do not rely on `--autogenerate`: it does not understand the SQL-defined checks, indexes and triggers.
 
 ## Code layout
@@ -140,10 +175,10 @@ uv run python -m scripts.process_events --rebuild --as-of 2026-10-13T09:00:00Z
 |---|---|
 | `app/main.py` | `create_app()` factory and lifespan (engine created at startup, disposed at shutdown) |
 | `app/core/` | Settings, logging, request id middleware, request log, errors, clock, time formatting, actor, status colours |
-| `app/api/` | Dependencies (`deps.py`, `context.py`), the `/api/v1` router, schemas and route modules |
+| `app/api/` | Dependencies (`deps.py`, `context.py`), the `/api/v1` router, mappers, schemas and route modules |
 | `app/queries/` | Read-side SQL for the API, one module per screen, always filtered by store |
+| `app/services/` | Business services, the only code that writes business tables: incidents, appointments, audit |
 | `app/processing/` | Network event processor: Aruba extractors, matching, status rules, runs |
-| `app/services/` | Business services (the only code that writes business tables); `audit.py` |
 | `app/db/` | Engine, sessions, Alembic helper |
 | `app/models/` | SQLAlchemy models and allowed value lists |
 | `app/seed/` | Seed data loaders and generators |

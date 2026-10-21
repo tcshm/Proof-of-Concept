@@ -1,0 +1,81 @@
+# seed/data/appointments.yaml
+# Site visits, as the admin portal would create them. Every appointment is
+# tagged to an ACTIVE incident of the same store and matches its story.
+#
+# day + at_local is a store-local time: "today" at that time, or the next day if
+# that time has already passed when the seed runs (so the screen is never empty).
+#
+# Store 01234 (Chennai): apt-001 to apt-003 of the mobile mock data. apt-004 and
+# apt-005 are not seeded because they have no incident.
+
+appointments:
+  # --- 01234 Chennai Anna Nagar (mobile mock) -------------------------------------
+  - key: "apt-001"
+    incident: "INC00001235"
+    appointment_type: "field_tech"
+    title: "Site Visit - Field Tech Engineer"
+    purpose: "POS Terminal Hardware Replacement"
+    details: "POS terminal hardware failure. Tech is scheduled for replacement at 12 PM."
+    day: "today"
+    at_local: "12:00"
+    duration_minutes: 60
+    vendor_name: "NCR Field Services"
+    technician_name: "Arun Prakash"
+
+  - key: "apt-002"
+    incident: "INC00001234"
+    appointment_type: "isp_technician"
+    title: "ISP Technician"
+    purpose: "AT&T Link Restoration"
+    details: "AT&T technician visit to store to check ISP device for restoring the primary link."
+    day: "today"
+    at_local: "13:00"
+    duration_minutes: 120
+    vendor_name: "AT&T"
+
+  - key: "apt-003"
+    incident: "INC00001237"
+    appointment_type: "third_party_vendor"
+    title: "Third Party Technician"
+    purpose: "Network Access Point-004 Replacement"
+    details: "Access point A004 is offline. Remote troubleshooting indicates issue with AP itself."
+    day: "today"
+    at_local: "14:00"
+    duration_minutes: 60
+    vendor_name: "Aruba Partner Services"
+
+  # --- 01456 Bengaluru Indiranagar ------------------------------------------------
+  - key: "blr-001"
+    incident: "INC00001301"
+    appointment_type: "isp_technician"
+    title: "ISP Technician"
+    purpose: "Airtel Backup Link Restoration"
+    details: "Airtel technician visit to check the backup link router and circuit. Store to provide comms room access."
+    day: "tomorrow"
+    at_local: "10:00"
+    duration_minutes: 120
+    vendor_name: "Airtel"
+
+  # --- 02556 Paris La Defense -----------------------------------------------------
+  - key: "par-001"
+    incident: "INC00001303"
+    appointment_type: "field_tech"
+    title: "Site Visit - Field Tech Engineer"
+    purpose: "Back Office Switch Replacement"
+    details: "Field tech will replace the failed back office switch SW02556N303 and bring the two access points behind it back online."
+    day: "today"
+    at_local: "16:00"
+    duration_minutes: 60
+    vendor_name: "Orange Business Field Services"
+
+  # --- 03340 Manchester Arndale ---------------------------------------------------
+  - key: "man-001"
+    incident: "INC00001304"
+    appointment_type: "third_party_vendor"
+    title: "Third Party Technician"
+    purpose: "Checkout Printer Repair"
+    details: "HP partner technician will replace the power supply of Printer 01 at the checkout."
+    day: "tomorrow"
+    at_local: "09:30"
+    duration_minutes: 90
+    vendor_name: "HP Partner Services"

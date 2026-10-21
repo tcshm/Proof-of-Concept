@@ -1,5 +1,9 @@
 # app/seed/loader.py
-"""Read the seed files, validate each one, then check references between files."""
+"""Read the seed files, validate each one, then check references between files.
+
+incidents.yaml and appointments.yaml (Phase 6) are checked against the stores,
+the inventory template and the assignment groups.
+"""
 
 from __future__ import annotations
 
@@ -10,6 +14,8 @@ import yaml
 from pydantic import BaseModel, ValidationError
 
 from app.db.migrate import PROJECT_ROOT
+from app.models.values import ACTIVE_INCIDENT_STATES
+from app.seed.itsm_schemas import AppointmentsSeed, IncidentsSeed
 from app.seed.schemas import (
     InventoryTemplate,
     MasterSeed,
@@ -34,6 +40,8 @@ class SeedData:
     overrides: OverridesSeed
     scenarios: ScenariosSeed
     prompts: PromptsSeed
+    incidents: IncidentsSeed
+    appointments: AppointmentsSeed
 
 
 def _load[M: BaseModel](path: Path, model: type[M]) -> M:
@@ -110,6 +118,54 @@ def _cross_check(data: SeedData) -> None:
         raise SeedDataError("\n".join(errors))
 
 
+def element_names(template: InventoryTemplate, site_code: str) -> set[str]:
+    """Every network element name the template produces for one store."""
+    return {
+        element.name.format(site=site_code, net="", isp_primary="", isp_backup="")
+        for element in template.network_elements
+    }
+
+
+def _cross_check_itsm(data: SeedData) -> None:
+    errors: list[str] = []
+    sites = {s.site_code for s in data.stores.stores}
+    groups = {g.name for g in data.master.assignment_groups}
+    devices = device_names(data.template)
+    incidents = {}
+
+    for incident in data.incidents.incidents:
+        where = f"incidents.yaml: {incident.number}"
+        if incident.number in incidents:
+            errors.append(f"{where}: duplicate incident number")
+        incidents[incident.number] = incident
+        if incident.site not in sites:
+            errors.append(f"{where}: unknown site {incident.site!r}")
+            continue
+        if incident.ci_element and incident.ci_element not in element_names(
+            data.template, incident.site
+        ):
+            errors.append(f"{where}: unknown network element {incident.ci_element!r}")
+        if incident.ci_device and incident.ci_device not in devices:
+            errors.append(f"{where}: unknown device {incident.ci_device!r}")
+        if incident.assignment_group not in groups:
+            errors.append(f"{where}: unknown assignment group {incident.assignment_group!r}")
+
+    keys: set[str] = set()
+    for appointment in data.appointments.appointments:
+        where = f"appointments.yaml: {appointment.key}"
+        if appointment.key in keys:
+            errors.append(f"{where}: duplicate key")
+        keys.add(appointment.key)
+        incident = incidents.get(appointment.incident)
+        if incident is None:
+            errors.append(f"{where}: unknown incident {appointment.incident!r}")
+        elif incident.state not in ACTIVE_INCIDENT_STATES:
+            errors.append(f"{where}: incident {appointment.incident} is not active")
+
+    if errors:
+        raise SeedDataError("\n".join(errors))
+
+
 def load_seed_data(data_dir: Path = DEFAULT_DATA_DIR) -> SeedData:
     data = SeedData(
         master=_load(data_dir / "master.yaml", MasterSeed),
@@ -118,6 +174,9 @@ def load_seed_data(data_dir: Path = DEFAULT_DATA_DIR) -> SeedData:
         overrides=_load(data_dir / "store_overrides.yaml", OverridesSeed),
         scenarios=_load(data_dir / "event_scenarios.yaml", ScenariosSeed),
         prompts=_load(data_dir / "prompts.yaml", PromptsSeed),
+        incidents=_load(data_dir / "incidents.yaml", IncidentsSeed),
+        appointments=_load(data_dir / "appointments.yaml", AppointmentsSeed),
     )
     _cross_check(data)
+    _cross_check_itsm(data)
     return data

@@ -1,5 +1,8 @@
 # app/models/itsm.py
-"""Group 3: ITSM. incident_journal is also the worker queue."""
+"""Group 3: ITSM. incident_journal is also the worker queue.
+
+Every appointment belongs to an incident (incident_id is NOT NULL since revision 0002).
+"""
 
 from __future__ import annotations
 
@@ -101,7 +104,7 @@ class Appointment(Base):
 
     id: Mapped[UUIDPk]
     store_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("stores.id"))
-    incident_id: Mapped[uuid.UUID | None]
+    incident_id: Mapped[uuid.UUID]
     appointment_type: Mapped[str]
     title: Mapped[str]
     purpose: Mapped[str]

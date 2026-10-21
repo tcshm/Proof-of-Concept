@@ -10,12 +10,21 @@ from datetime import datetime
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import DeviceType, NetworkElement, NetworkElementType, RawNetworkEvent, Store
+from app.models import (
+    AssignmentGroup,
+    Device,
+    DeviceType,
+    NetworkElement,
+    NetworkElementType,
+    RawNetworkEvent,
+    Store,
+)
 from app.models.values import ProcessingRunMode
 from app.processing.runner import run_processor
 from app.seed import ids
 from app.seed.events import generate_events, write_events
 from app.seed.inventory import build_inventory, write_inventory
+from app.seed.itsm import build_itsm, write_itsm
 from app.seed.loader import SeedData
 from app.seed.master import write_master
 
@@ -92,6 +101,28 @@ async def seed_network(session: AsyncSession, data: SeedData, anchor: datetime) 
     )
 
 
+async def seed_itsm(session: AsyncSession, data: SeedData, anchor: datetime) -> str:
+    """Replace incidents, journal entries and appointments (all journal entries pending)."""
+    groups = await session.scalar(select(func.count()).select_from(AssignmentGroup))
+    await _require(
+        session, "assignment groups", groups or 0, len(data.master.assignment_groups), "master"
+    )
+    inventories = build_inventory(data, anchor)
+    expected = sum(len(i.elements) + len(i.devices) for i in inventories)
+    elements = await session.scalar(select(func.count()).select_from(NetworkElement))
+    devices = await session.scalar(select(func.count()).select_from(Device))
+    await _require(
+        session, "inventory rows", (elements or 0) + (devices or 0), expected, "inventory"
+    )
+
+    rows = build_itsm(data, anchor)
+    await write_itsm(session, rows)
+    return (
+        f"{len(rows.incidents)} incidents, {len(rows.journal)} journal entries (pending), "
+        f"{len(rows.appointments)} appointments"
+    )
+
+
 Step = Callable[[AsyncSession, SeedData, datetime], Awaitable[str]]
 
 STEPS: dict[str, Step] = {
@@ -99,5 +130,6 @@ STEPS: dict[str, Step] = {
     "inventory": seed_inventory,
     "events": seed_events,
     "network": seed_network,
+    "itsm": seed_itsm,
 }
-STEP_ORDER = ("master", "inventory", "events", "network")
+STEP_ORDER = ("master", "inventory", "events", "network", "itsm")

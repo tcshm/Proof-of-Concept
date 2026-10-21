@@ -1,0 +1,282 @@
+# seed/data/incidents.yaml
+# Incidents and their journal entries, per store. Times are offsets from the
+# anchor (the seed run time). eta_local is a firm ETA at that store-local time:
+# today, or tomorrow if that time has already passed when the seed runs.
+#
+# Store 01234 (Chennai) is the mobile app mock data: INC00001234 to INC00001237,
+# field for field. Every incident opens a few minutes after its network or
+# device fault in event_scenarios.yaml / store_overrides.yaml.
+#
+# All journal entries are seeded "pending" for the worker (Phase 9). Each
+# incident also gets a system "Incident created" entry at opened_at, and a
+# resolved incident gets its close notes as a work note at resolved_at; both
+# are added by the seed code, not listed here.
+#
+# Numbers must stay below INC00002000 (new incidents use a sequence from 2000).
+
+incidents:
+  # --- 01234 Chennai Anna Nagar (mobile mock) -------------------------------------
+  - number: "INC00001234"
+    site: "01234"
+    short_description: "ISP - Primary Link"
+    u_symptom: "Retail SDWAN ATTLink Status"
+    business_service: "AT&T SDWAN Linkdown"
+    description: "Aruba reports WAN health DOWN on GW01234N001 uplink WAN1 (AT&T primary circuit). The store has failed over to the Airtel backup link."
+    category: "network"
+    subcategory: "WAN"
+    ci_element: "WAN01234-PRI"
+    contact_type: "monitoring"
+    opened_by: "Aruba Central"
+    impact: 1
+    urgency: 2
+    state: 3
+    hold_reason: "awaiting_site_visit"
+    assignment_group: "Network Ops"
+    assigned_to: "r.kumar"
+    eta_note: "Awaiting update from ISP"
+    opened_at: "-1h24m"
+    journal:
+      - element: "work_notes"
+        created_by: "r.kumar"
+        at: "-1h15m"
+        value: "Confirmed WAN health DOWN on GW01234N001 uplink WAN1 (AT&T circuit CKT-01234-P01). Store traffic failed over to WAN2 (Airtel). Raised ticket ATT-778812 with AT&T."
+      - element: "work_notes"
+        created_by: "r.kumar"
+        at: "-55m"
+        value: "AT&T engineer onsite at 1 PM today. Store must provide access to the comms room for the engineer."
+      - element: "comments"
+        created_by: "r.kumar"
+        at: "-45m"
+        value: "Primary link for the store is down, store network is up backup link. Working with the Telco Provider for the link restoration."
+
+  - number: "INC00001235"
+    site: "01234"
+    short_description: "POS Terminal 03 - System Offline"
+    u_symptom: "POS Application Error"
+    business_service: "POS Terminal 03 - Checkout 3 Hardware Issue"
+    description: "POS Terminal 03 at Checkout 3 stopped responding; the POS application reports a hardware error."
+    category: "hardware"
+    subcategory: "POS"
+    ci_device: "POS Terminal 03"
+    contact_type: "monitoring"
+    opened_by: "Aruba Central"
+    impact: 2
+    urgency: 2
+    state: 3
+    hold_reason: "awaiting_vendor"
+    assignment_group: "Retail EUC Ops"
+    assigned_to: "s.iyer"
+    eta_local: "12:00"
+    opened_at: "-6h"
+    journal:
+      - element: "work_notes"
+        created_by: "s.iyer"
+        at: "-5h40m"
+        value: "Remote diagnostics: POS Terminal 03 does not boot past BIOS; hardware fault confirmed. Replacement unit dispatched with the field tech, visit at 12 PM."
+      - element: "comments"
+        created_by: "s.iyer"
+        at: "-5h"
+        value: "POS terminal hardware failure. Hardware needs to be replaced by Field Tech."
+
+  - number: "INC00001236"
+    site: "01234"
+    short_description: "Register 04 - System Offline"
+    u_symptom: "Register Application Error"
+    business_service: "Register 04 - Checkout 4"
+    description: "Register 04 at Checkout 4 is offline; the register application reports an error."
+    category: "software"
+    subcategory: "Register"
+    ci_device: "Register 04"
+    contact_type: "monitoring"
+    opened_by: "Aruba Central"
+    impact: 2
+    urgency: 2
+    state: 2
+    assignment_group: "Retail EUC Ops"
+    assigned_to: "s.iyer"
+    eta_note: "Awaiting update from store"
+    opened_at: "-12h"
+    journal:
+      - element: "work_notes"
+        created_by: "s.iyer"
+        at: "-11h"
+        value: "Register 04 not reachable on VLAN 121. Store manager to check Register 04 power and network cable at Checkout 4."
+      - element: "comments"
+        created_by: "s.iyer"
+        at: "-10h30m"
+        value: "Register 04 is offline. Trying to reach store to check the device status."
+
+  - number: "INC00001237"
+    site: "01234"
+    short_description: "Wireless - Access Point A004"
+    u_symptom: "Network accesspoint unavailable"
+    business_service: "Access Point - Sales Floor is down"
+    description: "Access point AP01234N004 on the sales floor is down (SW01234N301 port 11)."
+    category: "network"
+    subcategory: "Wireless"
+    ci_element: "AP01234N004"
+    contact_type: "monitoring"
+    opened_by: "Aruba Central"
+    impact: 2
+    urgency: 2
+    state: 2
+    assignment_group: "Network Ops"
+    assigned_to: "r.kumar"
+    eta_local: "14:00"
+    opened_at: "-2h12m"
+    journal:
+      - element: "work_notes"
+        created_by: "r.kumar"
+        at: "-2h"
+        value: "AP did not recover after a remote PoE reset on SW01234N301 port 11. RMA approved; third-party vendor to replace the AP at 2 PM today."
+      - element: "comments"
+        created_by: "r.kumar"
+        at: "-1h50m"
+        value: "Access point A004 is offline. Remote troubleshooting indicates issue with AP itself. New AP hardware has been ordered, once delivered, tech will be assigned for doing the replacement."
+
+  - number: "INC00001238"
+    site: "01234"
+    short_description: "Printer 02 - Not Printing"
+    u_symptom: "Paper jam at checkout printer"
+    business_service: "Printer 02 - Checkout area"
+    description: "Store reports Printer 02 at the checkout is jamming and not printing receipts."
+    category: "hardware"
+    subcategory: "Printer"
+    ci_device: "Printer 02"
+    contact_type: "phone"
+    caller: "Store Manager - 01234"
+    opened_by: "Service Desk"
+    impact: 3
+    urgency: 3
+    state: 6
+    assignment_group: "Retail EUC Ops"
+    assigned_to: "s.iyer"
+    opened_at: "-5h"
+    resolved_at: "-1h"
+    close_code: "Solved (Permanently)"
+    close_notes: "Replaced the worn paper feed roller on Printer 02 with remote guidance; test page printed successfully. Store to confirm receipts and labels print correctly at the checkout."
+    journal:
+      - element: "comments"
+        created_by: "s.iyer"
+        at: "-4h30m"
+        value: "We are looking into the printing problem on Printer 02. Please use Printer 01 or 03 meanwhile."
+
+  # --- 01456 Bengaluru Indiranagar ------------------------------------------------
+  - number: "INC00001301"
+    site: "01456"
+    short_description: "ISP - Backup Link"
+    u_symptom: "Retail SDWAN Airtel Link Status"
+    business_service: "Airtel SDWAN Linkdown"
+    description: "Aruba reports WAN health DOWN on GW01456N001 uplink WAN2 (Airtel backup circuit). The store is running normally on the primary link."
+    category: "network"
+    subcategory: "WAN"
+    ci_element: "WAN01456-BKP"
+    contact_type: "monitoring"
+    opened_by: "Aruba Central"
+    impact: 2
+    urgency: 2
+    state: 3
+    hold_reason: "awaiting_site_visit"
+    assignment_group: "Network Ops"
+    assigned_to: "a.menon"
+    eta_note: "Airtel engineer visit booked"
+    opened_at: "-5h55m"
+    journal:
+      - element: "work_notes"
+        created_by: "a.menon"
+        at: "-5h30m"
+        value: "WAN2 (Airtel backup) health down on GW01456N001. Store still on the primary link, no trading impact. Airtel ticket AIR-55120 raised; engineer visit booked for tomorrow 10 AM."
+      - element: "comments"
+        created_by: "a.menon"
+        at: "-5h"
+        value: "The backup internet link for the store is down. The store is working normally on the primary link. An Airtel engineer will visit tomorrow to restore it."
+
+  - number: "INC00001302"
+    site: "01456"
+    short_description: "Printer 02 - Paper Jam"
+    u_symptom: "Printer reporting paper jam"
+    business_service: "Printer 02 - Checkout area"
+    description: "Store reports a recurring paper jam on Printer 02 at the checkout."
+    category: "hardware"
+    subcategory: "Printer"
+    ci_device: "Printer 02"
+    contact_type: "phone"
+    caller: "Store Manager - 01456"
+    opened_by: "Service Desk"
+    impact: 3
+    urgency: 3
+    state: 2
+    assignment_group: "Retail EUC Ops"
+    assigned_to: "s.iyer"
+    eta_note: "Under investigation"
+    opened_at: "-2h50m"
+    journal:
+      - element: "work_notes"
+        created_by: "s.iyer"
+        at: "-2h30m"
+        value: "Guided the store through clearing the jam over the phone; jam returns after a few pages. Pickup roller likely worn."
+      - element: "comments"
+        created_by: "s.iyer"
+        at: "-2h20m"
+        value: "We are looking into the paper jam on Printer 02. Please use Printer 01 or 03 meanwhile."
+
+  # --- 02556 Paris La Defense -----------------------------------------------------
+  - number: "INC00001303"
+    site: "02556"
+    short_description: "Network Switch - Back Office"
+    u_symptom: "Network switch unreachable"
+    business_service: "Back office network down"
+    description: "Access switch SW02556N303 (back office) is down; AP02556N003 and AP02556N005 behind it are offline."
+    category: "network"
+    subcategory: "LAN"
+    ci_element: "SW02556N303"
+    contact_type: "monitoring"
+    opened_by: "Aruba Central"
+    impact: 1
+    urgency: 2
+    state: 3
+    hold_reason: "awaiting_site_visit"
+    assignment_group: "Network Ops"
+    assigned_to: "l.martin"
+    eta_local: "16:00"
+    opened_at: "-2h55m"
+    journal:
+      - element: "work_notes"
+        created_by: "l.martin"
+        at: "-2h40m"
+        value: "SW02556N303 not reachable; AP02556N003 and AP02556N005 down behind it. Remote power cycle through the PDU failed. Field tech dispatched with a replacement switch for 4 PM."
+      - element: "comments"
+        created_by: "l.martin"
+        at: "-2h30m"
+        value: "The back office network switch is down, so back office PCs and two Wi-Fi access points are offline. A technician will replace the switch today at 4 PM."
+
+  # --- 03340 Manchester Arndale ---------------------------------------------------
+  - number: "INC00001304"
+    site: "03340"
+    short_description: "Printer 01 - Not Powering On"
+    u_symptom: "Printer offline"
+    business_service: "Printer 01 - Checkout area"
+    description: "Store reports Printer 01 at the checkout does not power on."
+    category: "hardware"
+    subcategory: "Printer"
+    ci_device: "Printer 01"
+    contact_type: "phone"
+    caller: "Store Manager - 03340"
+    opened_by: "Service Desk"
+    impact: 3
+    urgency: 2
+    state: 3
+    hold_reason: "awaiting_vendor"
+    assignment_group: "Retail EUC Ops"
+    assigned_to: "j.walker"
+    eta_note: "Awaiting vendor visit"
+    opened_at: "-19h"
+    journal:
+      - element: "work_notes"
+        created_by: "j.walker"
+        at: "-18h"
+        value: "Printer 01 does not power on after a power cable swap; power supply fault suspected. HP partner engaged, case HP-90311."
+      - element: "comments"
+        created_by: "j.walker"
+        at: "-17h"
+        value: "Printer 01 is not powering on. An HP technician has been booked to repair it. Please use Printer 02 or 03 meanwhile."

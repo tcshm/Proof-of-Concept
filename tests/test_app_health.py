@@ -86,8 +86,11 @@ async def test_business_prefix_and_docs(client: AsyncClient, app: FastAPI) -> No
     schema = (await client.get("/openapi.json")).json()
     assert schema["info"]["version"] == "0.1.0"
     assert "/health" in schema["paths"]
-    # Nothing is registered under /api/v1 yet; the prefix is reserved for Phase 5+.
-    assert (await client.get("/api/v1/incidents")).status_code == 404
+    # Business routes are registered under /api/v1 and need the X-Site-Id header.
+    assert "/api/v1/incidents" in schema["paths"]
+    assert (await client.get("/api/v1/incidents")).status_code == 422
+    # An unknown path under the prefix is still a 404.
+    assert (await client.get("/api/v1/no-such-route")).status_code == 404
 
 
 async def test_docs_can_be_disabled(test_settings: Settings) -> None:
