@@ -142,6 +142,38 @@ The worker, the seed and later the MCP servers call the same queries and service
 - Delivery is pull-based: the app fetches the list and polls the unread count. Push notifications
   can be added later as an extra step after the rows are written.
 
+## LLM layer
+
+`app/llm/` sends a prompt to a model and returns JSON that matches the prompt's schema. The worker
+(Phase 9) depends only on the `LlmProvider` interface; settings decide which provider answers.
+
+| Provider | `LLM_PROVIDER` | Default model | Needs |
+|---|---|---|---|
+| NVIDIA NIM | `nvidia` | `nvidia/nemotron-3.5-lightning-30b-a3b` | `LLM_API_KEY` (nvapi-...) |
+| Groq | `groq` | `openai/gpt-oss-20b` | `LLM_API_KEY` (gsk_...) |
+| Azure AI Foundry / Azure OpenAI | `foundry` | your deployment | `LLM_API_KEY`, `LLM_MODEL`, `LLM_BASE_URL` |
+| Fake (no network) | `fake` | - | nothing |
+
+- Switching provider is a `.env` change; check it with `uv run python -m scripts.llm_check`
+  (`--fallback` checks only the fallback provider).
+- All three real providers use one OpenAI-compatible class (`app/llm/providers.py`); their
+  differences (base URL, default model, how JSON is enforced, token limit name) are presets.
+- JSON is enforced by the provider where possible (`LLM_STRUCTURED_OUTPUT=auto`: NVIDIA guided
+  JSON, Groq and Foundry JSON mode) and always validated against the schema
+  (`app/llm/validation.py`): code fences and `<think>` blocks are stripped; anything that does not
+  match is `LlmInvalidOutput`.
+- Errors: `LlmUnavailable` (timeout, network, 429, 5xx: retry later), `LlmRejected` (bad key,
+  unknown model, 4xx: fix the settings), `LlmInvalidOutput` (bad answer). No hidden retries: the
+  worker retries. Free endpoints can be slow, so `LLM_TIMEOUT_SECONDS` defaults to 120.
+- Optional fallback provider (`LLM_FALLBACK_*`), used only when the primary is unavailable.
+- Prompts come from the active `ai_prompt_versions` row (`app/llm/prompts.py`); `{context_json}`
+  is filled with the call's context. Every call is recorded in `ai_workflow_runs`
+  (`app/llm/runs.py`): the running row is committed before the call, the model is called outside
+  any transaction, and `model_name` stores `provider:model` of the model that answered.
+- Tests never call the network; `tests/test_llm_live.py` makes one real call only when
+  `LLM_LIVE_TEST=true`.
+- On NVIDIA's free tier, inputs and outputs may be recorded by NVIDIA: use mock data only.
+
 ## Network event processing
 
 Raw Aruba events (`raw_network_events`) are turned into `network_events` (typed history) and
@@ -179,6 +211,7 @@ uv run python -m scripts.process_events --rebuild --as-of 2026-10-13T09:00:00Z
 | `uv run python -m scripts.seed itsm` | Reset incidents, journal entries, appointments and appointment notices |
 | `uv run python -m scripts.seed notifications` | Reset the seeded portal announcements |
 | `uv run python -m scripts.process_events --rebuild` | Rebuild the network status from the raw events |
+| `uv run python -m scripts.llm_check` | One test call to the configured LLM provider (`--fallback` for the fallback) |
 | `uv run python -m scripts.request_log_tail` | Show the last API requests (`-n 50`, `--site 01234`) |
 
 ## Seed data
@@ -231,6 +264,7 @@ uv run python -m scripts.process_events --rebuild --as-of 2026-10-13T09:00:00Z
 | `app/api/` | Dependencies (`deps.py`, `context.py`), the `/api/v1` router, mappers, schemas and route modules |
 | `app/queries/` | Read-side SQL for the API, one module per screen, always filtered by store |
 | `app/services/` | Business services, the only code that writes business tables: incidents, appointments, notifications, audit |
+| `app/llm/` | LLM layer: providers (NVIDIA NIM, Groq, Azure AI Foundry, fake), fallback, validation, prompts, run records |
 | `app/processing/` | Network event processor: Aruba extractors, matching, status rules, runs |
 | `app/db/` | Engine, sessions, Alembic helper |
 | `app/models/` | SQLAlchemy models and allowed value lists |
