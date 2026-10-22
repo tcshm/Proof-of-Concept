@@ -47,7 +47,8 @@ uv run uvicorn app.main:app --reload      # http://localhost:8000
 | `GET /api/v1/incidents/{number}` | One incident (any state) with its store-visible comments |
 | `GET /api/v1/appointments` | Upcoming visits (scheduled or in progress, not yet over), soonest first |
 | `GET /api/v1/alerts` | Active alerts (one per open incident), critical first, newest first |
-| `GET /api/v1/actions` | Open actions not yet overdue, soonest due first, with `dueByText` in store time |
+| `GET /api/v1/actions` | Open actions not yet overdue (soonest due first, `dueByText` in store time), then actions answered in the last 24 hours (`status` `responded`, with `response`) |
+| `POST /api/v1/actions/{actionId}/responses` | The store's reply: `clientRequestId` (UUID per tap), `answerYesNo` for yes/no actions, `responseText` (required for free_text). 201 new, 200 repeated request id, 409 answered / closed / expired |
 | `GET /api/v1/notifications` | The store's live notifications, newest first (`?limit=`, default 50, max 200); marks them delivered |
 | `GET /api/v1/notifications/unread-count` | `{"unreadCount": n}` for the app's badge |
 | `POST /api/v1/notifications/{id}/read` | Mark one notification read (reading again keeps the first read time) |
@@ -199,6 +200,9 @@ store-facing messages with the two LLM workflows. It is a separate process from 
 - Entries of one incident are handled in order; claiming uses `FOR UPDATE SKIP LOCKED`.
 - Open actions past their due time are closed as `expired` (every `WORKER_SWEEP_SECONDS`), and
   `/actions` never shows them.
+- A store's reply to an action is only recorded: a store comment on the incident (`skipped`, never
+  sent to the LLM) and a `store_action_responses` row; the action becomes `responded` until IT
+  closes it or the incident is closed (`app/services/action_responses.py`).
 - Free-tier quotas: at most `WORKER_MAX_CALLS_PER_MINUTE` calls (default 20), a pause after HTTP 429,
   and `--max-calls` to cap a drain. A full drain of the seed data makes about 26 calls.
 
