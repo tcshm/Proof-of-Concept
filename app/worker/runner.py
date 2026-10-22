@@ -3,19 +3,27 @@
 
 For each pending journal entry:
     1. claim it (short transaction)
-    2. plan: impact assessment, update classification, or skip (no LLM call)
+    2. plan + task: assess_impact, classify_work_note, classify_comment,
+       confirm_fix, or skip (no LLM call)
     3. build the context, wait for the pacing slot, call the LLM: the 'running'
        ai_workflow_runs row is committed first and the model is called outside
        any transaction (app.llm.runs.call_and_record)
-    4. check the answer, then apply it in ONE transaction: alert / action /
-       notification + run 'succeeded' + entry 'done'
-    5. on failure: retry later (WORKER_RETRY_DELAYS_MINUTES), or after the last
-       attempt write a template alert (impact) / mark the entry 'failed'
+    4. run the guards (app/worker/guards.py), then apply in ONE transaction:
+       alert / action / notification + run + entry 'done'. When a guard changed
+       the answer, the run output holds {"answer", "applied", "adjustments"};
+       a request held back because an action is already open makes the run
+       'needs_review'.
+    5. on failure: retry later (WORKER_RETRY_DELAYS_MINUTES); after the last
+       attempt a safe fallback:
+         assess_impact     template alert            (run needs_review)
+         confirm_fix       template yes/no question  (run needs_review)
+         classify_comment  the comment, as written   (run needs_review)
+         classify_work_note entry 'failed'
 
+At most one OPEN action per incident: a second request becomes a notification.
 Free-tier quotas: calls are paced (WORKER_MAX_CALLS_PER_MINUTE), a 429 pauses
-the worker (WORKER_RATE_LIMIT_PAUSE_SECONDS), entries that need no LLM are
-skipped, a rejected request (bad key / model) is never retried, and drain() can
-stop after a number of calls (--max-calls).
+the worker, entries that need no LLM are skipped, a rejected request is never
+retried, and drain() can stop after a number of calls (--max-calls).
 """
 
 from __future__ import annotations
@@ -50,11 +58,17 @@ from app.models.values import (
     JournalProcessStatus,
     SystemEvent,
 )
-from app.services.actions import create_action, expire_overdue_actions
+from app.services.actions import (
+    OpenActionExists,
+    close_open_action,
+    create_action,
+    expire_overdue_actions,
+)
 from app.services.alerts import create_alert
 from app.services.notification_templates import action_required, incident_update
 from app.services.notifications import create_system_notification
-from app.worker.context import IncidentInfo, build_context, load_incident
+from app.worker.context import IncidentInfo, build_context, load_incident, load_open_action
+from app.worker.guards import ClassificationDecision, check_alert, check_classification
 from app.worker.queue import (
     ClaimedEntry,
     claim_next,
@@ -65,22 +79,20 @@ from app.worker.queue import (
     reset_processing,
 )
 from app.worker.rules import (
-    AlertText,
-    ClassificationPlan,
-    Decision,
-    Plan,
     Route,
-    check_alert_output,
-    check_classification,
+    Task,
     is_rate_limited,
     plan_entry,
     retry_delay,
+    task_for,
     template_alert,
+    template_fix_question,
 )
 
 logger = logging.getLogger("app.worker")
 
 WORKER_ACTOR = ActorContext.system("change-worker", AuditSource.WORKER)
+REPLACED_NOTE = "Replaced by the fix confirmation."
 
 # Outcome labels returned by process_next (and counted by drain).
 ALERT_CREATED = "alert_created"
@@ -89,6 +101,7 @@ NOTIFICATION_CREATED = "notification_created"
 NO_ACTION = "no_action"
 SKIPPED = "skipped"
 TEMPLATE_ALERT = "template_alert"
+FALLBACK = "fallback"
 RETRY = "retry"
 FAILED = "failed"
 
@@ -145,6 +158,14 @@ class DrainStats:
             f"entries: {parts or 'none'}; LLM calls {self.llm_calls}; "
             f"expired actions {self.expired_actions}; still pending {self.still_pending}"
         )
+
+
+def _run_output(result: LlmResult, applied: dict[str, Any], adjustments: list[str]):
+    """What is stored as ai_workflow_runs.output: the plain answer, or the answer
+    plus what was applied when a guard changed it."""
+    if not adjustments:
+        return None
+    return {"answer": result.output, "applied": applied, "adjustments": adjustments}
 
 
 class Worker:
@@ -241,11 +262,15 @@ class Worker:
             )
             return EntryResult(entry.id, info.number, SKIPPED, plan.reason)
 
+        task = task_for(plan, entry.element)
         workflow = AiWorkflow(plan.route.value)
         try:
             async with self.factory() as session:
                 prompt = await load_active_prompt(session, workflow)
-                context = await build_context(session, info, entry, plan, now)
+                open_action = (
+                    await load_open_action(session, info.id) if task != Task.ASSESS_IMPACT else None
+                )
+                context = await build_context(session, info, entry, task, now, open_action)
         except (PromptError, LlmConfigError) as exc:
             return await self._fail(entry, info, f"{exc.__class__.__name__}: {exc}")
 
@@ -263,16 +288,18 @@ class Worker:
                 clock=self.clock,
             )
             run_id = call.run_id
-            if plan.route == Route.IMPACT:
-                alert = check_alert_output(call.result.output)
-                return await self._apply_alert(entry, info, run_id, call.result, alert)
+            if task == Task.ASSESS_IMPACT:
+                allowed = tuple(context.get("allowed_severities") or ())
+                decision = check_alert(call.result.output, allowed)
+                return await self._apply_alert(entry, info, run_id, call.result, decision)
             classification = check_classification(
                 call.result.output,
-                element=entry.element,
+                task=task,
                 entry_text=entry.value,
-                is_resolution=plan.is_resolution,
                 tz=info.timezone,
                 now=self.clock.now(),
+                open_action=open_action.info() if open_action else None,
+                resolved_at=info.resolved_at,
             )
             return await self._apply_classification(
                 entry, info, run_id, call.result, classification
@@ -280,7 +307,7 @@ class Worker:
         except LlmError as exc:
             if run_id is not None:  # the answer failed our checks: record it on the run
                 await self._record_run_failure(run_id, exc)
-            return await self._llm_error(entry, info, plan, exc)
+            return await self._llm_error(entry, info, task, exc)
         except Exception as exc:
             logger.exception("unexpected error while applying an LLM result")
             if run_id is not None:
@@ -288,15 +315,9 @@ class Worker:
             return await self._unexpected(entry, info.number, exc)
 
     # --- applying results -----------------------------------------------------------------
-    async def _apply_alert(
-        self,
-        entry: ClaimedEntry,
-        info: IncidentInfo,
-        run_id: Any,
-        result: LlmResult,
-        alert: AlertText,
-    ) -> EntryResult:
+    async def _apply_alert(self, entry, info, run_id, result: LlmResult, decision) -> EntryResult:
         now = self.clock.now()
+        alert = decision.alert
         async with self.factory() as session:
             state = await session.scalar(
                 select(Incident.state).where(Incident.id == info.id).with_for_update()
@@ -317,11 +338,70 @@ class Worker:
                 outcome = ALERT_CREATED
             else:  # resolved or cancelled while the model was answering
                 outcome = NO_ACTION
-            await record_success(session, run_id, result, AiOutcome(outcome), now)
+            applied = {"title": alert.title, "detail": alert.detail, "severity": alert.severity}
+            await record_success(
+                session,
+                run_id,
+                result,
+                AiOutcome(outcome),
+                now,
+                output=_run_output(result, applied, decision.adjustments),
+            )
             await finish_entry(session, entry.id, JournalProcessStatus.DONE, now)
             await session.commit()
         logger.info("alert created", extra={"incident": info.number, "outcome": outcome})
         return EntryResult(entry.id, info.number, outcome, alert.title)
+
+    async def _notify(self, session, entry, info, message: str) -> str:
+        content = incident_update(
+            incident_number=info.number, message=message, publish_at=entry.created_at
+        )
+        await create_system_notification(
+            session,
+            WORKER_ACTOR,
+            event=SystemEvent.INCIDENT_UPDATE,
+            store_id=info.store_id,
+            content=content,
+            publish_at=entry.created_at,
+            incident_id=info.id,
+            source_journal_id=entry.id,
+        )
+        return content.title
+
+    async def _create_action(self, session, entry, info, run_id, plan: ClassificationDecision):
+        action, _ = await create_action(
+            session,
+            WORKER_ACTOR,
+            store_id=info.store_id,
+            incident_id=info.id,
+            source_journal_id=entry.id,
+            title=plan.title or "",
+            detail=plan.detail or "",
+            severity=plan.severity,
+            expected_response=plan.expected_response or "acknowledge",
+            due_by=plan.due_by,
+            source=ActionSource.LLM,
+            ai_workflow_run_id=run_id,
+            created_at=entry.created_at,
+        )
+        content = action_required(
+            incident_number=info.number,
+            action_title=action.title,
+            action_detail=action.detail,
+            publish_at=entry.created_at,
+        )
+        await create_system_notification(
+            session,
+            WORKER_ACTOR,
+            event=SystemEvent.ACTION_REQUIRED,
+            store_id=info.store_id,
+            content=content,
+            publish_at=entry.created_at,
+            incident_id=info.id,
+            action_id=action.id,
+            source_journal_id=entry.id,
+        )
+        return action
 
     async def _apply_classification(
         self,
@@ -329,116 +409,131 @@ class Worker:
         info: IncidentInfo,
         run_id: Any,
         result: LlmResult,
-        plan: ClassificationPlan,
+        plan: ClassificationDecision,
     ) -> EntryResult:
         now = self.clock.now()
         async with self.factory() as session:
-            if plan.decision == Decision.ACTION:
-                action, _ = await create_action(
-                    session,
-                    WORKER_ACTOR,
-                    store_id=info.store_id,
-                    incident_id=info.id,
-                    source_journal_id=entry.id,
-                    title=plan.title or "",
-                    detail=plan.detail or "",
-                    severity=plan.severity,
-                    expected_response=plan.expected_response or "acknowledge",
-                    due_by=plan.due_by,
-                    source=ActionSource.LLM,
-                    ai_workflow_run_id=run_id,
-                    created_at=entry.created_at,
-                )
-                content = action_required(
-                    incident_number=info.number,
-                    action_title=action.title,
-                    action_detail=action.detail,
-                    publish_at=entry.created_at,
-                )
-                await create_system_notification(
-                    session,
-                    WORKER_ACTOR,
-                    event=SystemEvent.ACTION_REQUIRED,
-                    store_id=info.store_id,
-                    content=content,
-                    publish_at=entry.created_at,
-                    incident_id=info.id,
-                    action_id=action.id,
-                    source_journal_id=entry.id,
-                )
-                outcome, detail = ACTION_CREATED, action.title
-            elif plan.decision == Decision.NOTIFY:
-                content = incident_update(
-                    incident_number=info.number,
-                    message=plan.message or "",
-                    publish_at=entry.created_at,
-                )
-                await create_system_notification(
-                    session,
-                    WORKER_ACTOR,
-                    event=SystemEvent.INCIDENT_UPDATE,
-                    store_id=info.store_id,
-                    content=content,
-                    publish_at=entry.created_at,
-                    incident_id=info.id,
-                    source_journal_id=entry.id,
-                )
-                outcome, detail = NOTIFICATION_CREATED, content.title
-            else:
+            await expire_overdue_actions(session, WORKER_ACTOR, now, commit=False)
+            if plan.decision == "action":
+                if plan.replace_open_action:
+                    await close_open_action(session, WORKER_ACTOR, info.id, REPLACED_NOTE, now)
+                try:
+                    action = await self._create_action(session, entry, info, run_id, plan)
+                    outcome, detail = ACTION_CREATED, action.title
+                except OpenActionExists:
+                    plan.adjustments.append("one open action per incident (database): "
+                                            "action -> notify")  # fmt: skip
+                    plan.decision, plan.held_back = "notify", True
+                    plan.message = plan.detail or plan.title or entry.value
+            if plan.decision == "notify":
+                detail = await self._notify(session, entry, info, plan.message or entry.value)
+                outcome = NOTIFICATION_CREATED
+            elif plan.decision == "none":
                 outcome, detail = NO_ACTION, "internal update"
-            await record_success(session, run_id, result, AiOutcome(outcome), now)
+            status = AiRunStatus.NEEDS_REVIEW if plan.held_back else AiRunStatus.SUCCEEDED
+            await record_success(
+                session,
+                run_id,
+                result,
+                AiOutcome(outcome),
+                now,
+                status=status,
+                output=_run_output(result, plan.applied(), plan.adjustments),
+            )
             await finish_entry(session, entry.id, JournalProcessStatus.DONE, now)
             await session.commit()
-        logger.info("update classified", extra={"incident": info.number, "outcome": outcome})
+        logger.info(
+            "update classified",
+            extra={"incident": info.number, "outcome": outcome, "heldBack": plan.held_back},
+        )
         return EntryResult(entry.id, info.number, outcome, detail)
 
-    async def _apply_template_alert(self, entry: ClaimedEntry, info: IncidentInfo) -> EntryResult:
+    # --- fallbacks after the last failed attempt ---------------------------------------------
+    async def _latest_run_id(self, session: AsyncSession, entry: ClaimedEntry):
+        return await session.scalar(
+            select(AiWorkflowRun.id)
+            .where(AiWorkflowRun.journal_id == entry.id)
+            .order_by(AiWorkflowRun.started_at.desc())
+            .limit(1)
+        )
+
+    async def _mark_reviewed(self, session: AsyncSession, run_id, outcome: AiOutcome) -> None:
+        await session.execute(
+            update(AiWorkflowRun)
+            .where(AiWorkflowRun.id == run_id)
+            .values(status=AiRunStatus.NEEDS_REVIEW, outcome=outcome)
+            .execution_options(synchronize_session=False)
+        )
+
+    async def _fallback(self, entry: ClaimedEntry, info: IncidentInfo, task: Task) -> EntryResult:
         now = self.clock.now()
         async with self.factory() as session:
-            run_id = await session.scalar(
-                select(AiWorkflowRun.id)
-                .where(AiWorkflowRun.journal_id == entry.id)
-                .order_by(AiWorkflowRun.started_at.desc())
-                .limit(1)
-            )
+            run_id = await self._latest_run_id(session, entry)
             state = await session.scalar(
                 select(Incident.state).where(Incident.id == info.id).with_for_update()
             )
             if run_id is None:
-                await fail_entry(session, entry.id, "no AI run to attach the alert to", now)
+                await fail_entry(session, entry.id, "no AI run to attach the fallback to", now)
                 await session.commit()
                 return EntryResult(entry.id, info.number, FAILED, "no AI run")
-            if state not in ACTIVE_INCIDENT_STATES:
-                await finish_entry(session, entry.id, JournalProcessStatus.SKIPPED, now)
-                await session.commit()
-                return EntryResult(entry.id, info.number, SKIPPED, "the incident is not active")
-            text = template_alert(
-                short_description=info.short_description,
-                symptom=info.u_symptom,
-                priority=info.priority,
-            )
-            await create_alert(
-                session,
-                WORKER_ACTOR,
-                store_id=info.store_id,
-                incident_id=info.id,
-                title=text.title,
-                detail=text.detail,
-                severity=text.severity,
-                source=AlertSource.SYSTEM,
-                ai_workflow_run_id=run_id,
-                created_at=entry.created_at,
-            )
-            await session.execute(
-                update(AiWorkflowRun)
-                .where(AiWorkflowRun.id == run_id)
-                .values(status=AiRunStatus.NEEDS_REVIEW, outcome=AiOutcome.ALERT_CREATED)
-                .execution_options(synchronize_session=False)
-            )
+
+            if task == Task.ASSESS_IMPACT:
+                if state not in ACTIVE_INCIDENT_STATES:
+                    await finish_entry(session, entry.id, JournalProcessStatus.SKIPPED, now)
+                    await session.commit()
+                    return EntryResult(entry.id, info.number, SKIPPED, "incident not active")
+                text = template_alert(
+                    short_description=info.short_description,
+                    symptom=info.u_symptom,
+                    priority=info.priority,
+                )
+                await create_alert(
+                    session,
+                    WORKER_ACTOR,
+                    store_id=info.store_id,
+                    incident_id=info.id,
+                    title=text.title,
+                    detail=text.detail,
+                    severity=text.severity,
+                    source=AlertSource.SYSTEM,
+                    ai_workflow_run_id=run_id,
+                    created_at=entry.created_at,
+                )
+                await self._mark_reviewed(session, run_id, AiOutcome.ALERT_CREATED)
+                outcome, detail = TEMPLATE_ALERT, text.title
+
+            elif task == Task.CONFIRM_FIX:
+                title, question = template_fix_question(info.short_description)
+                await expire_overdue_actions(session, WORKER_ACTOR, now, commit=False)
+                open_action = await load_open_action(session, info.id)
+                if open_action is not None and (
+                    info.resolved_at is None or open_action.created_at < info.resolved_at
+                ):
+                    await close_open_action(session, WORKER_ACTOR, info.id, REPLACED_NOTE, now)
+                    open_action = None
+                if open_action is None:
+                    plan = ClassificationDecision(
+                        decision="action",
+                        title=title,
+                        detail=question,
+                        expected_response="yes_no",
+                    )
+                    await self._create_action(session, entry, info, run_id, plan)
+                    await self._mark_reviewed(session, run_id, AiOutcome.ACTION_CREATED)
+                    outcome, detail = FALLBACK, title
+                else:
+                    await self._mark_reviewed(session, run_id, AiOutcome.NO_ACTION)
+                    outcome, detail = FALLBACK, "fix confirmation already open"
+
+            else:  # Task.CLASSIFY_COMMENT: send the comment as IT wrote it
+                notice = await self._notify(session, entry, info, entry.value)
+                await self._mark_reviewed(session, run_id, AiOutcome.NOTIFICATION_CREATED)
+                outcome, detail = FALLBACK, notice
+
             await finish_entry(session, entry.id, JournalProcessStatus.DONE, now)
             await session.commit()
-        logger.warning("template alert written", extra={"incident": info.number})
-        return EntryResult(entry.id, info.number, TEMPLATE_ALERT, text.title)
+        logger.warning("fallback applied", extra={"incident": info.number, "task": task.value})
+        return EntryResult(entry.id, info.number, outcome, detail)
 
     # --- failures --------------------------------------------------------------------------
     async def _record_run_failure(self, run_id: Any, error: Exception) -> None:
@@ -468,7 +563,7 @@ class Worker:
         return EntryResult(entry.id, info.number, FAILED, error)
 
     async def _llm_error(
-        self, entry: ClaimedEntry, info: IncidentInfo, plan: Plan, error: LlmError
+        self, entry: ClaimedEntry, info: IncidentInfo, task: Task, error: LlmError
     ) -> EntryResult:
         message = f"{error.__class__.__name__}: {error}"
         if is_rate_limited(error):
@@ -476,9 +571,9 @@ class Worker:
         final = isinstance(error, LlmRejected) or entry.attempts >= self.config.max_attempts
         if not final:
             return await self._retry(entry, info.number, message)
-        if plan.route == Route.IMPACT:
-            return await self._apply_template_alert(entry, info)
-        return await self._fail(entry, info, message)
+        if task == Task.CLASSIFY_WORK_NOTE:
+            return await self._fail(entry, info, message)
+        return await self._fallback(entry, info, task)
 
     async def _unexpected(self, entry: ClaimedEntry, number: str, error: Exception) -> EntryResult:
         message = f"{error.__class__.__name__}: {error}"

@@ -1,0 +1,165 @@
+# seed/eval/llm_cases.yaml
+# Fixed scenarios for the LLM scorecard: uv run python -m scripts.llm_eval
+# Each case is sent through the worker's path (active prompt -> model -> schema ->
+# guards); nothing is written to the database. Stores and devices here are NOT
+# the seed data, so the scorecard measures behaviour, not memorised answers.
+#
+# task: assess_impact | classify_work_note | classify_comment | confirm_fix
+# expect: decision (list), expected_response (list, for actions), due_local
+#         ("HH:MM" store time, or "none"), severity_in (list, impact),
+#         must_not_contain (texts the store must never see)
+
+defaults:
+  store:
+    name: "Pune Koregaon Park"
+    timezone: "Asia/Kolkata"
+    now_local: "2026-11-04T10:00"
+
+cases:
+  # --- update classification: Gate 1 (request -> action) ------------------------------
+  - name: "access-request-with-time"
+    task: "classify_work_note"
+    incident: {title: "ISP - Primary Link", priority: 2, category: "network"}
+    main_ci: {kind: "network element", type: "WAN Link", name: "WAN-PRI", business_criticality: "high"}
+    trigger: "ISP engineer arrives at 1 PM today. Store must provide access to the comms room for the engineer."
+    expect: {decision: ["action"], expected_response: ["acknowledge"], due_local: "13:00"}
+
+  - name: "check-cable-and-report"
+    task: "classify_work_note"
+    incident: {title: "Till 02 - System Offline", priority: 3, category: "hardware"}
+    main_ci: {type: "Register", name: "Till 02", location: "Checkout 2", business_criticality: "high"}
+    trigger: "Device not reachable on the network. Store manager to check the power and network cable of Till 02 and reply with what they find."
+    expect: {decision: ["action"], expected_response: ["free_text", "yes_no"], due_local: "none"}
+
+  - name: "comment-asks-restart"
+    task: "classify_comment"
+    incident: {title: "Label Printer 01 - Not Printing", priority: 4, category: "hardware"}
+    main_ci: {type: "Printer", name: "Label Printer 01", location: "Stockroom", business_criticality: "medium"}
+    trigger: "Please restart Label Printer 01 and let us know if it prints a test label."
+    expect: {decision: ["action"], expected_response: ["yes_no", "free_text"]}
+
+  - name: "request-without-clock-time"
+    task: "classify_work_note"
+    incident: {title: "Wireless - Access Point Stockroom", priority: 3}
+    main_ci: {kind: "network element", type: "Access Point", name: "AP-SR", location: "Stockroom"}
+    trigger: "Vendor visit planned for tomorrow. Store must keep the stockroom door unlocked for the vendor."
+    expect: {decision: ["action"], expected_response: ["acknowledge"], due_local: "none"}
+
+  # --- Gate 2 (information -> notify) ---------------------------------------------------
+  - name: "trying-to-reach-store"
+    task: "classify_comment"
+    incident: {title: "Till 02 - System Offline", priority: 3, category: "hardware"}
+    main_ci: {type: "Register", name: "Till 02", location: "Checkout 2", business_criticality: "high"}
+    trigger: "Till 02 is offline. We are trying to reach the store to check the device status."
+    expect: {decision: ["notify"]}
+
+  - name: "workaround-comment"
+    task: "classify_comment"
+    incident: {title: "Label Printer 01 - Not Printing", priority: 4, category: "hardware"}
+    main_ci: {type: "Printer", name: "Label Printer 01", location: "Stockroom"}
+    trigger: "Label Printer 01 is jammed. Please use the printer at the front desk meanwhile."
+    expect: {decision: ["notify"]}
+
+  - name: "replacement-dispatched"
+    task: "classify_work_note"
+    incident: {title: "POS Terminal 02 - System Offline", priority: 3, category: "hardware"}
+    main_ci: {type: "POS", name: "POS Terminal 02", location: "Checkout 2", business_criticality: "high"}
+    trigger: "Remote diagnostics confirm a hardware fault. Replacement unit dispatched with the field tech, visit at 3 PM."
+    expect: {decision: ["notify"]}
+
+  - name: "vendor-will-replace"
+    task: "classify_work_note"
+    incident: {title: "Wireless - Access Point Sales Floor", priority: 3}
+    main_ci: {kind: "network element", type: "Access Point", name: "AP-SF", location: "Sales Floor"}
+    trigger: "RMA approved; the third-party vendor will replace the access point this afternoon."
+    expect: {decision: ["notify"]}
+
+  # --- Gate 3 (nothing -> none) -----------------------------------------------------------
+  - name: "internal-troubleshooting"
+    task: "classify_work_note"
+    incident: {title: "Network Switch - Back Office", priority: 2}
+    main_ci: {kind: "network element", type: "Switch", name: "SW-BO", location: "Back office", business_criticality: "high"}
+    trigger: "Checked switch logs and port counters, no errors found. Escalated to the network L2 team."
+    expect: {decision: ["none"]}
+
+  - name: "internal-ids-never-shown"
+    task: "classify_work_note"
+    incident: {title: "ISP - Backup Link", priority: 3}
+    main_ci: {kind: "network element", type: "WAN Link", name: "WAN-BKP"}
+    trigger: "Raised ticket VND-448812 with the ISP for circuit CKT-55021-B01; gateway 10.40.0.1 still sees the line down."
+    expect:
+      decision: ["notify", "none"]
+      must_not_contain: ["VND-448812", "CKT-55021-B01", "10.40.0.1"]
+
+  # --- one open action per incident -------------------------------------------------------
+  - name: "second-request-is-held-back"
+    task: "classify_work_note"
+    incident: {title: "ISP - Primary Link", priority: 2}
+    main_ci: {kind: "network element", type: "WAN Link", name: "WAN-PRI", business_criticality: "high"}
+    trigger: "Store to restart the router in the comms room and confirm the lights are green."
+    open_action: "Provide comms room access at 1 PM"
+    expect: {decision: ["notify"]}
+
+  - name: "same-request-again-is-held-back"
+    task: "classify_comment"
+    incident: {title: "POS Terminal 02 - System Offline", priority: 3, category: "hardware"}
+    main_ci: {type: "POS", name: "POS Terminal 02", business_criticality: "high"}
+    trigger: "Please check that POS Terminal 02 is powered on and tell us what the screen shows."
+    open_action: "Check POS Terminal 02 power"
+    expect: {decision: ["notify"]}
+
+  # --- confirm the fix -----------------------------------------------------------------------
+  - name: "confirm-fix-with-ask"
+    task: "confirm_fix"
+    incident: {title: "Wireless - Access Point Sales Floor", priority: 3, state: 6}
+    main_ci: {kind: "network element", type: "Access Point", name: "AP-SF", location: "Sales Floor"}
+    trigger: "Replaced the access point. Store to confirm that Wi-Fi on the sales floor works."
+    expect: {decision: ["action"], expected_response: ["yes_no"]}
+
+  - name: "confirm-fix-without-ask"
+    task: "confirm_fix"
+    incident: {title: "ISP - Primary Link", priority: 2, state: 6}
+    main_ci: {kind: "network element", type: "WAN Link", name: "WAN-PRI"}
+    trigger: "Provider replaced the line card; primary link stable for 30 minutes. Closing as solved."
+    open_action: "Provide comms room access at 1 PM"
+    expect: {decision: ["action"], expected_response: ["yes_no"]}
+
+  # --- impact assessment -----------------------------------------------------------------------
+  - name: "impact-store-outage"
+    task: "assess_impact"
+    incident:
+      title: "Store network down"
+      description: "Gateway unreachable; all checkouts and card payments are down."
+      symptom: "All tills offline"
+      priority: 1
+    main_ci: {kind: "network element", type: "Gateway", name: "GW", location: "Comms room", business_criticality: "high"}
+    expect: {severity_in: ["critical"]}
+
+  - name: "impact-backup-link"
+    task: "assess_impact"
+    incident:
+      title: "ISP - Primary Link"
+      description: "Primary internet link down; the store failed over to the backup link and payments still work."
+      priority: 2
+    main_ci: {kind: "network element", type: "WAN Link", name: "WAN-PRI", business_criticality: "high"}
+    expect: {severity_in: ["warning"]}
+
+  - name: "impact-single-pos"
+    task: "assess_impact"
+    incident:
+      title: "POS Terminal 02 - System Offline"
+      description: "POS Terminal 02 does not boot; the other three terminals work."
+      category: "hardware"
+      priority: 3
+    main_ci: {type: "POS", name: "POS Terminal 02", location: "Checkout 2", business_criticality: "high"}
+    expect: {severity_in: ["warning"]}
+
+  - name: "impact-one-printer"
+    task: "assess_impact"
+    incident:
+      title: "Label Printer 01 - Not Printing"
+      description: "Label printer in the stockroom jams; the front desk printer works. Device serial PRN0912301."
+      category: "hardware"
+      priority: 5
+    main_ci: {type: "Printer", name: "Label Printer 01", location: "Stockroom", business_criticality: "medium"}
+    expect: {severity_in: ["info", "warning"], must_not_contain: ["PRN0912301"]}

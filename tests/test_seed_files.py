@@ -30,7 +30,7 @@ def test_committed_seed_files_are_valid() -> None:
         "printer",
         "workstation",
     }
-    assert len(data.prompts.prompts) == 2
+    assert len(data.prompts.prompts) == 4
 
 
 def test_chennai_is_store_01234() -> None:

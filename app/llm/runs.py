@@ -2,9 +2,11 @@
 """Record every LLM call in ai_workflow_runs.
 
     start_run       before the call: status 'running', the exact input context
-    record_success  after the result has been applied (Phase 9, in the SAME
-                    transaction that writes the alert / action / notification):
-                    output, outcome, tokens, latency
+    record_success  after the result has been applied (in the SAME transaction
+                    that writes the alert / action / notification): output,
+                    outcome, tokens, latency. output defaults to the model's
+                    answer; the worker passes {"answer", "applied", "adjustments"}
+                    when its guards changed the answer.
     record_failure  after an LlmError: status 'failed' (outcome 'invalid_output'
                     for a bad answer), the error and any raw text
     call_and_record the usual sequence: commit the 'running' row in its own short
@@ -77,6 +79,7 @@ async def record_success(
     now: datetime,
     *,
     status: AiRunStatus | str = AiRunStatus.SUCCEEDED,
+    output: dict[str, Any] | None = None,
 ) -> None:
     await session.execute(
         update(AiWorkflowRun)
@@ -84,7 +87,7 @@ async def record_success(
         .values(
             status=str(AiRunStatus(status)),
             outcome=str(AiOutcome(outcome)),
-            output=result.output,
+            output=result.output if output is None else output,
             model_name=result.model_label,
             prompt_tokens=result.prompt_tokens,
             completion_tokens=result.completion_tokens,

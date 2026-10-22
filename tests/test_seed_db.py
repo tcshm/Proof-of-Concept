@@ -38,7 +38,7 @@ async def test_seed_all_writes_expected_rows(db_session: AsyncSession) -> None:
     assert await _count(db_session, Store) == 10
     assert await _count(db_session, NetworkElement) == 130
     assert await _count(db_session, Device) == 170
-    assert await _count(db_session, AiPromptVersion) == 2
+    assert await _count(db_session, AiPromptVersion) == 4
     raw = await _count(db_session, RawNetworkEvent)
     assert 150 <= raw <= 400
     # The network step processed the window: nothing is left pending.

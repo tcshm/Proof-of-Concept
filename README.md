@@ -23,6 +23,20 @@ uv run python -m scripts.seed all         # load the POC seed data (network, ITS
 uv run pytest                             # tests (use ric_poc_test, never ric_poc)
 ```
 
+## Run the demo from scratch
+
+```powershell
+git clone <repo-url>; cd ric-backend
+uv sync
+Copy-Item .env.example .env               # set the PostgreSQL passwords and LLM_API_KEY (nvapi-...)
+uv run python -m scripts.db_bootstrap     # role ric_app + ric_poc + ric_poc_test
+uv run python -m scripts.demo --reset --yes
+uv run uvicorn app.main:app --port 8000   # then open http://127.0.0.1:8000/docs
+```
+
+`scripts.demo` rebuilds the schema, loads every seed step, lets the worker process the journal
+with the configured LLM and ends with `scripts.verify` (every check must pass).
+
 ## Running the API
 
 ```powershell
@@ -213,6 +227,42 @@ uv run python -m scripts.worker --drain --max-calls 5
 uv run python -m scripts.worker                    # keep running (Ctrl+C to stop)
 ```
 
+## LLM rules, scorecard and verification
+
+The worker's prompts (version 2, `seed/data/prompts.yaml`) guide the model; the guards in
+`app/worker/guards.py` enforce the rules in code on every answer. When a guard changes an answer,
+`ai_workflow_runs.output` holds `{"answer", "applied", "adjustments"}`.
+
+- Update classification, three gates in order:
+  1. **Request -> action** only when IT's update explicitly asks the store to do or report
+     something. The model must quote those words (`store_request_quote`); code checks the quote is
+     in the update and reads as a request to the store, otherwise the action becomes a notification.
+  2. **Information -> notify**: progress, a visit, a workaround, a changed fix time.
+  3. **Nothing -> none**: internal technical detail. A comment is never `none` (sent as written).
+- **At most one open action per incident** (still waiting for the store). Answered actions do not
+  count. Enforced by the worker, `app/services/actions.py` and the database index
+  `ux_action_one_open_per_incident` (revision `0003`). A second request becomes a notification and
+  the AI run is marked `needs_review` for IT.
+- A resolution always asks a yes/no "is it fixed" question, replacing an older open action.
+- A due time is kept only when the update states a clock time (`due_time_quote`).
+- Alerts: severity within the range allowed by the incident priority and the main CI's criticality;
+  no clock times. No store-facing text may contain IP/MAC addresses, device codes or serial
+  numbers, ticket or circuit ids, staff user names or e-mail addresses.
+- After the last failed attempt: impact -> template alert; confirm_fix -> template yes/no question;
+  comment -> sent as written; work note -> entry `failed`.
+
+```powershell
+uv run python -m scripts.llm_eval --list          # the 18 scorecard cases (no LLM call)
+uv run python -m scripts.llm_eval                 # scorecard against the configured model (~18 calls)
+uv run python -m scripts.llm_eval --case trying-to-reach-store --repeat 3
+uv run python -m scripts.verify                   # check the database follows the rules (no LLM call)
+uv run python -m scripts.demo                     # seed all -> worker drain -> verify (~25 calls)
+uv run python -m scripts.demo --reset --yes       # the same from an empty schema
+```
+
+LLM wording varies between runs; everything else is deterministic, and `scripts.verify` proves the
+rules hold. Without an NVIDIA key, `LLM_PROVIDER=fake` runs the whole flow with placeholder text.
+
 ## Network event processing
 
 Raw Aruba events (`raw_network_events`) are turned into `network_events` (typed history) and
@@ -252,6 +302,9 @@ uv run python -m scripts.process_events --rebuild --as-of 2026-10-13T09:00:00Z
 | `uv run python -m scripts.process_events --rebuild` | Rebuild the network status from the raw events |
 | `uv run python -m scripts.llm_check` | One test call to the configured LLM provider (`--fallback` for the fallback) |
 | `uv run python -m scripts.worker --drain` | Process all pending journal entries with the LLM, then stop (uses LLM quota) |
+| `uv run python -m scripts.demo` | Seed all, drain the worker with the configured LLM, verify (`--reset --yes` from an empty schema) |
+| `uv run python -m scripts.verify` | Check the database follows the agreed rules (no LLM call) |
+| `uv run python -m scripts.llm_eval` | Scorecard of the LLM workflows (18 calls; `--list`, `--case`, `--repeat`) |
 | `uv run python -m scripts.request_log_tail` | Show the last API requests (`-n 50`, `--site 01234`) |
 
 ## Seed data
@@ -286,7 +339,7 @@ uv run python -m scripts.process_events --rebuild --as-of 2026-10-13T09:00:00Z
 
 - The schema is defined in plain SQL in `migrations/sql/` and applied by Alembic revisions in
   `migrations/versions/`. `0001` creates the full POC schema (22 tables); `0002` adds the incident
-  number sequence and makes `appointments.incident_id` required.
+  number sequence and makes `appointments.incident_id` required; `0003` allows at most one open store action per incident.
 - Models in `app/models/` describe columns and keys only. CHECK constraints, partial indexes and
   triggers live in the database. `tests/test_models_match_db.py` fails if models and database differ.
 - Allowed values for constrained text columns are in `app/models/values.py`.

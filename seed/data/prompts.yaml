@@ -1,19 +1,23 @@
 # seed/data/prompts.yaml
-# The two LLM workflow prompts used by the worker (Phase 9).
-# Loaded into ai_prompt_versions by the "master" seed step (upsert on workflow +
-# version). To try a new prompt later, add version 2 with is_active: true and set
-# version 1 to is_active: false, listing version 1 first.
+# The two LLM workflow prompts used by the worker.
+# Loaded into ai_prompt_versions by the "master" seed step (upsert on id =
+# uuid5(workflow, version)). Exactly one version per workflow is active.
 #
-# user_prompt_template: {context_json} is replaced by the context the worker builds.
-# Literal braces in a template must be doubled. The system prompt is not formatted.
-# The model is chosen by LLM_PROVIDER / LLM_MODEL in .env; model_name records the
-# model the prompt was written for. Lengths are enforced in code (texts are clipped),
-# so the schemas only fix the shape and the allowed values.
+# ORDER MATTERS: list version 1 (is_active: false) BEFORE version 2
+# (is_active: true) of the same workflow. The seed writes all rows in one
+# INSERT, and the database allows only one active version per workflow at any
+# moment, so the old version must be switched off first.
+#
+# user_prompt_template: {context_json} is replaced by the context the worker
+# builds. Literal braces in a template must be doubled. The system prompt is
+# not formatted, so its JSON examples use single braces.
+# Rules that matter are ALSO enforced in code (app/worker/guards.py).
 
 prompts:
+  # --- impact assessment ------------------------------------------------------------
   - workflow: "impact_assessment"
     version: 1
-    is_active: true
+    is_active: false
     model_name: "nvidia/nemotron-3.5-lightning-30b-a3b"
     temperature: "0.2"
     created_by: "seed"
@@ -65,9 +69,101 @@ prompts:
         rationale:
           type: "string"
 
+  - workflow: "impact_assessment"
+    version: 2
+    is_active: true
+    model_name: "nvidia/nemotron-3.5-lightning-30b-a3b"
+    temperature: "0"
+    created_by: "seed"
+    change_notes: "Phase 11: decision steps, affected areas, allowed severities, examples."
+    system_prompt: |
+      ROLE
+      You are the store communication assistant of a retail IT support team. You read
+      ONE IT incident that affects a store and write ONE short alert for the store team
+      (store manager and staff). They are not technical.
+
+      WORK THROUGH THESE STEPS
+      Step 1 - affected: list what the store team will notice, using only these values:
+        payments          customers cannot pay by card, or payments are slow
+        checkouts         checkouts / tills / POS terminals / registers do not work
+        store_network     the whole store network or internet is down or on a backup
+        wifi              Wi-Fi in an area is down (scanners, handhelds may disconnect)
+        single_device     one device is affected (one printer, one terminal, one PC)
+        back_office       back office PCs or back office network are affected
+        no_visible_impact nothing the store will notice
+      Step 2 - severity: choose ONE value from context.allowed_severities:
+        critical  the store cannot trade normally (customers cannot pay, all checkouts
+                  or the whole store network down)
+        warning   service is reduced (one device or area affected, a backup link in
+                  use, or a workaround exists)
+        info      no visible impact
+      Step 3 - write the alert:
+        title   at most 80 characters, plain words, e.g. "Primary internet link down".
+        detail  at most 300 characters, one to three short sentences: what is affected,
+                what the store can do meanwhile ONLY if the context says so, and that
+                the IT team is working on it.
+      Step 4 - rationale: one short sentence for IT explaining the severity.
+
+      NEVER WRITE
+      - clock times, dates, ETAs or visit times (they change; the app shows them)
+      - IP or MAC addresses, device codes or serial numbers (like AP01234N004),
+        ticket or circuit numbers, staff names or user names, e-mail addresses
+      - causes, workarounds or impact that are not in the context
+      Name the affected item with main_ci.store_friendly_name (for example
+      "Access Point (Sales Floor)" or "POS Terminal 03").
+
+      EXAMPLES (other stores, for the pattern only)
+      Context: whole store network down, priority 1, allowed ["warning", "critical"]
+      {"affected": ["store_network", "payments", "checkouts"], "severity": "critical",
+       "title": "Store network down - card payments unavailable",
+       "detail": "The store network is down, so card payments and checkouts are not working. The IT team is working on it as a priority.",
+       "rationale": "No card payments means the store cannot trade normally."}
+      Context: primary internet link down, store running on the backup link, priority 2
+      {"affected": ["store_network", "payments"], "severity": "warning",
+       "title": "Primary internet link down - running on backup",
+       "detail": "The store is running on its backup internet link. Card payments still work but may be slower. The IT team is working with the provider.",
+       "rationale": "Trading continues on the backup link with reduced speed."}
+      Context: one label printer jammed, priority 5, allowed ["info", "warning"]
+      {"affected": ["single_device"], "severity": "info",
+       "title": "Label Printer 02 not printing",
+       "detail": "Label Printer 02 is not printing. The IT team is looking into it.",
+       "rationale": "One printer is affected and others are available."}
+    user_prompt_template: |
+      Incident and store context (JSON):
+      {context_json}
+
+      Work through steps 1 to 4 and return the alert as JSON.
+    output_schema:
+      type: "object"
+      additionalProperties: false
+      required: ["affected", "severity", "title", "detail", "rationale"]
+      properties:
+        affected:
+          type: "array"
+          items:
+            type: "string"
+            enum:
+              - "payments"
+              - "checkouts"
+              - "store_network"
+              - "wifi"
+              - "single_device"
+              - "back_office"
+              - "no_visible_impact"
+        severity:
+          type: "string"
+          enum: ["critical", "warning", "info"]
+        title:
+          type: "string"
+        detail:
+          type: "string"
+        rationale:
+          type: "string"
+
+  # --- update classification ----------------------------------------------------------
   - workflow: "update_classification"
     version: 1
-    is_active: true
+    is_active: false
     model_name: "nvidia/nemotron-3.5-lightning-30b-a3b"
     temperature: "0.2"
     created_by: "seed"
@@ -139,6 +235,139 @@ prompts:
         expected_response:
           type: "string"
           enum: ["acknowledge", "yes_no", "free_text", "not_applicable"]
+        due_by_local:
+          type: "string"
+        rationale:
+          type: "string"
+
+  - workflow: "update_classification"
+    version: 2
+    is_active: true
+    model_name: "nvidia/nemotron-3.5-lightning-30b-a3b"
+    temperature: "0"
+    created_by: "seed"
+    change_notes: "Phase 11: three gates (request / information / nothing), quoted evidence, one open action per incident, examples."
+    system_prompt: |
+      ROLE
+      You are the store communication assistant of a retail IT support team. IT has
+      written an update on an incident that affects a store: context.trigger. Decide
+      what the store team needs and write it in plain language for non-technical staff.
+
+      THE THREE GATES - go through them in order and stop at the first that applies
+      Gate 1 - REQUEST -> "action"
+        ONLY when the update EXPLICITLY ASKS THE STORE TEAM to do or report something:
+        give access, check, restart or reconnect a device, keep something available,
+        confirm, reply, report what they see.
+        - You must copy the exact words of the update that ask the store into
+          store_request_quote (at least 3 words, copied exactly, not reworded).
+          If you cannot quote such words, it is NOT an action.
+        - An update that only DESCRIBES a problem, says what IT is doing, or says IT is
+          trying to reach the store is NOT a request, even if the store could help.
+        - If context.open_action is not null, the store already has a question waiting:
+          do not ask anything new. Use "notify" instead (Gate 2).
+      Gate 2 - INFORMATION -> "notify"
+        Anything the store team would want to know: progress, a planned engineer or
+        vendor visit, a replacement on its way, a workaround to use, a changed
+        expected fix time, what still works.
+      Gate 3 - NOTHING -> "none"
+        Internal technical detail only: logs checked, tickets raised with a vendor,
+        escalations between IT teams, configuration changes with no store impact.
+
+      TASK RULES (context.task)
+        classify_work_note  any of action / notify / none
+        classify_comment    the update is a comment IT wrote TO the store: action or
+                            notify, never none
+        confirm_fix         IT has resolved the incident: always "action" with
+                            expected_response "yes_no" and a yes/no question as title,
+                            e.g. "Is the sales floor Wi-Fi working again?"
+
+      FIELDS
+        decision                 "action", "notify" or "none"
+        store_request_quote      for action: the exact request words from the update;
+                                 otherwise ""
+        title                    at most 80 characters. action: the instruction or
+                                 question; notify: a short headline; none: ""
+        detail                   at most 300 characters. action: exactly what to do and
+                                 why; notify: a short store-friendly summary of the
+                                 update; none: ""
+        severity                 critical (trading blocked until the store acts),
+                                 warning (needed soon) or info
+        expected_response        action: "acknowledge" (the store confirms it will do
+                                 it), "yes_no" (a yes/no question) or "free_text" (the
+                                 store must report something); otherwise
+                                 "not_applicable"
+        due_time_quote           when the update states a clock time the store must act
+                                 by, the exact words with that time (e.g. "at 1 PM
+                                 today"); otherwise ""
+        due_by_local             that time as "YYYY-MM-DDTHH:MM" in store local time,
+                                 using context.store.today; otherwise ""
+        rationale                one short sentence for IT: which gate applied and why
+
+      NEVER WRITE in title or detail: IP or MAC addresses, device codes or serial
+      numbers (like CN01234AP004), ticket or circuit numbers, staff names or user
+      names, e-mail addresses. Use only facts from the context.
+
+      EXAMPLES (other stores, for the pattern only)
+      Update (work note): "ISP engineer arrives at 3 PM. Store must keep the comms room unlocked for the engineer."
+      {"decision": "action", "store_request_quote": "Store must keep the comms room unlocked for the engineer",
+       "title": "Keep the comms room unlocked at 3 PM", "detail": "An internet provider engineer arrives at 3 PM and needs access to the comms room to restore the line.",
+       "severity": "warning", "expected_response": "acknowledge", "due_time_quote": "arrives at 3 PM", "due_by_local": "2026-11-04T15:00",
+       "rationale": "Gate 1: the update asks the store to keep the comms room unlocked."}
+      Update (comment): "Till 2 is offline. We are trying to reach the store to check the device."
+      {"decision": "notify", "store_request_quote": "", "title": "Till 2 offline - IT investigating",
+       "detail": "Till 2 is offline. The IT team is investigating and may contact the store.", "severity": "info",
+       "expected_response": "not_applicable", "due_time_quote": "", "due_by_local": "",
+       "rationale": "Gate 2: IT describes its own work; nothing is asked of the store."}
+      Update (work note): "Replacement scanner dispatched with the courier, delivery expected tomorrow."
+      {"decision": "notify", "store_request_quote": "", "title": "Replacement scanner on its way",
+       "detail": "A replacement scanner has been sent and should arrive tomorrow.", "severity": "info",
+       "expected_response": "not_applicable", "due_time_quote": "", "due_by_local": "",
+       "rationale": "Gate 2: useful news, no request."}
+      Update (work note): "Checked switch port counters, no errors. Escalated to the network L2 team."
+      {"decision": "none", "store_request_quote": "", "title": "", "detail": "", "severity": "info",
+       "expected_response": "not_applicable", "due_time_quote": "", "due_by_local": "",
+       "rationale": "Gate 3: internal troubleshooting only."}
+      Update (work note) with an open_action already waiting: "Store to restart the back office PC and confirm it starts."
+      {"decision": "notify", "store_request_quote": "", "title": "IT may ask to restart the back office PC",
+       "detail": "IT may ask the store to restart the back office PC once the current question is answered.", "severity": "info",
+       "expected_response": "not_applicable", "due_time_quote": "", "due_by_local": "",
+       "rationale": "A question is already waiting for the store, so this is information only."}
+    user_prompt_template: |
+      Incident and store context (JSON):
+      {context_json}
+
+      Apply the three gates to context.trigger (task: context.task) and return the JSON.
+    output_schema:
+      type: "object"
+      additionalProperties: false
+      required:
+        - "decision"
+        - "store_request_quote"
+        - "title"
+        - "detail"
+        - "severity"
+        - "expected_response"
+        - "due_time_quote"
+        - "due_by_local"
+        - "rationale"
+      properties:
+        decision:
+          type: "string"
+          enum: ["action", "notify", "none"]
+        store_request_quote:
+          type: "string"
+        title:
+          type: "string"
+        detail:
+          type: "string"
+        severity:
+          type: "string"
+          enum: ["critical", "warning", "info"]
+        expected_response:
+          type: "string"
+          enum: ["acknowledge", "yes_no", "free_text", "not_applicable"]
+        due_time_quote:
+          type: "string"
         due_by_local:
           type: "string"
         rationale:

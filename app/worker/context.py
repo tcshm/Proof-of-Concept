@@ -2,11 +2,15 @@
 """What the model sees for one journal entry.
 
 The context is a plain dict, stored as ai_workflow_runs.input_context and sent
-as {context_json}. It contains only what the model needs: incident text, the
-main CI, the store's local time and hours, store-visible comments, upcoming
-visits and open actions. Work notes are NEVER included except the entry being
-classified (the trigger), and no staff names, phone numbers or emails.
-Texts are shortened to keep requests small (free-tier quotas).
+as {context_json}. assemble_context() builds it from plain parts, so the worker
+and the evaluation scorecard (app/worker/evaluate.py) send exactly the same shape.
+
+Keys: task, incident, main_ci, store, assignment_group, recent_store_comments,
+and per task:
+    assess_impact  allowed_severities (no visits, no ETA: alerts never mention times)
+    classify_*     trigger, open_action, recently_answered_actions, upcoming_visits
+Work notes are NEVER included except the entry being classified (the trigger).
+No staff names, phone numbers or emails. Texts are shortened (free-tier quotas).
 """
 
 from __future__ import annotations
@@ -33,22 +37,26 @@ from app.models import (
     NetworkElementType,
     Store,
     StoreAction,
+    StoreActionResponse,
 )
-from app.models.values import (
-    ActionStatus,
-    ActorType,
-    AppointmentStatus,
-    JournalElement,
-)
+from app.models.values import ActionStatus, ActorType, AppointmentStatus, JournalElement
 from app.services.incident_rules import state_label
+from app.worker.guards import OpenActionInfo, allowed_severities
 from app.worker.queue import ClaimedEntry
-from app.worker.rules import Plan, Route, clip
+from app.worker.rules import Task, clip
 
 MAX_TEXT = 600
+MAX_TRIGGER = 1500
 MAX_COMMENTS = 5
 MAX_VISITS = 5
+RECENT_ANSWERS = timedelta(hours=24)
 _DAY_KEYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 _DAY_NAMES = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+TRIGGER_TYPES = {
+    Task.CLASSIFY_WORK_NOTE: "work_note",
+    Task.CLASSIFY_COMMENT: "comment",
+    Task.CONFIRM_FIX: "resolution",
+}
 
 
 @dataclass(frozen=True)
@@ -77,6 +85,17 @@ class IncidentInfo:
     device_id: uuid.UUID | None
 
 
+@dataclass(frozen=True)
+class OpenAction:
+    id: uuid.UUID
+    title: str
+    expected_response: str
+    created_at: datetime
+
+    def info(self) -> OpenActionInfo:
+        return OpenActionInfo(title=self.title, created_at=self.created_at)
+
+
 def local_text(value: datetime, tz: ZoneInfo) -> str:
     """'2026-10-13 13:00 IST'"""
     return f"{to_local(value, tz).strftime('%Y-%m-%d %H:%M')} {tz_abbreviation(value, tz)}"
@@ -86,6 +105,76 @@ def _short(value: str | None) -> str | None:
     return clip(value, MAX_TEXT) if value else None
 
 
+# --- pure assembly -------------------------------------------------------------------------
+def store_facts(
+    name: str, tz: ZoneInfo, business_hours: dict[str, Any], now: datetime
+) -> dict[str, Any]:
+    local = to_local(now, tz)
+    hours = business_hours.get(_DAY_KEYS[local.weekday()]) or []
+    today = ", ".join(f"{start}-{end}" for start, end in hours) or "closed"
+    return {
+        "name": name,
+        "timezone": tz.key,
+        "local_time_now": local_text(now, tz),
+        "today": f"{_DAY_NAMES[local.weekday()]} {local.date().isoformat()}",
+        "opening_hours_today": today,
+        "open_now": is_open(business_hours, tz, now),
+    }
+
+
+def assemble_context(
+    *,
+    task: Task | str,
+    incident: dict[str, Any],
+    main_ci: dict[str, Any] | None,
+    store: dict[str, Any],
+    assignment_group: dict[str, Any],
+    comments: list[dict[str, Any]],
+    visits: list[dict[str, Any]] | None = None,
+    trigger: dict[str, Any] | None = None,
+    open_action: dict[str, Any] | None = None,
+    recent_answers: list[dict[str, Any]] | None = None,
+    severities: tuple[str, ...] | None = None,
+) -> dict[str, Any]:
+    task = Task(task)
+    context: dict[str, Any] = {
+        "task": task.value,
+        "incident": incident,
+        "main_ci": main_ci,
+        "store": store,
+        "assignment_group": assignment_group,
+        "recent_store_comments": comments,
+    }
+    if task == Task.ASSESS_IMPACT:
+        context["allowed_severities"] = list(severities or ())
+        return context
+    context["trigger"] = trigger
+    context["open_action"] = open_action
+    context["recently_answered_actions"] = recent_answers or []
+    context["upcoming_visits"] = visits or []
+    return context
+
+
+def incident_facts(info: IncidentInfo, *, with_eta: bool) -> dict[str, Any]:
+    facts: dict[str, Any] = {
+        "number": info.number,
+        "title": info.short_description,
+        "description": _short(info.description),
+        "symptom": info.u_symptom,
+        "category": info.category,
+        "priority": info.priority,
+        "state": state_label(info.state),
+        "on_hold_reason": info.hold_reason,
+    }
+    if with_eta:
+        facts["expected_fix_local"] = (
+            local_text(info.u_resolution_eta, info.timezone) if info.u_resolution_eta else None
+        )
+        facts["status_note"] = info.u_eta_note
+    return facts
+
+
+# --- database loading ----------------------------------------------------------------------
 async def load_incident(session: AsyncSession, incident_id: uuid.UUID) -> IncidentInfo:
     row = (
         await session.execute(
@@ -144,13 +233,32 @@ async def load_incident(session: AsyncSession, incident_id: uuid.UUID) -> Incide
     )
 
 
+async def load_open_action(session: AsyncSession, incident_id: uuid.UUID) -> OpenAction | None:
+    """The incident's action still waiting for the store (at most one exists)."""
+    row = (
+        await session.execute(
+            select(
+                StoreAction.id,
+                StoreAction.title,
+                StoreAction.expected_response,
+                StoreAction.created_at,
+            )
+            .where(StoreAction.incident_id == incident_id, StoreAction.status == ActionStatus.OPEN)
+            .order_by(StoreAction.created_at)
+            .limit(1)
+        )
+    ).one_or_none()
+    if row is None:
+        return None
+    return OpenAction(row.id, row.title, row.expected_response, row.created_at)
+
+
 async def _main_ci(session: AsyncSession, info: IncidentInfo) -> dict[str, Any] | None:
     if info.network_element_id is not None:
         kind = aliased(NetworkElementType)
         row = (
             await session.execute(
                 select(
-                    NetworkElement.name,
                     NetworkElement.location_in_store,
                     kind.display_name,
                     kind.business_criticality,
@@ -160,10 +268,11 @@ async def _main_ci(session: AsyncSession, info: IncidentInfo) -> dict[str, Any] 
             )
         ).one_or_none()
         if row is not None:
+            where = f" ({row.location_in_store})" if row.location_in_store else ""
             return {
                 "kind": "network element",
                 "type": row.display_name,
-                "name": row.name,
+                "store_friendly_name": f"{row.display_name}{where}",
                 "location": row.location_in_store,
                 "business_criticality": row.business_criticality,
             }
@@ -185,25 +294,11 @@ async def _main_ci(session: AsyncSession, info: IncidentInfo) -> dict[str, Any] 
             return {
                 "kind": "store device",
                 "type": row.display_name,
-                "name": row.name,
+                "store_friendly_name": row.name,
                 "location": row.location_in_store,
                 "business_criticality": row.business_criticality,
             }
     return None
-
-
-def _store(info: IncidentInfo, now: datetime) -> dict[str, Any]:
-    local = to_local(now, info.timezone)
-    hours = info.business_hours.get(_DAY_KEYS[local.weekday()]) or []
-    today = ", ".join(f"{start}-{end}" for start, end in hours) or "closed"
-    return {
-        "name": info.store_name,
-        "timezone": info.timezone.key,
-        "local_time_now": local_text(now, info.timezone),
-        "today": f"{_DAY_NAMES[local.weekday()]} {local.date().isoformat()}",
-        "opening_hours_today": today,
-        "open_now": is_open(info.business_hours, info.timezone, now),
-    }
 
 
 async def _comments(
@@ -258,19 +353,32 @@ async def _visits(session: AsyncSession, info: IncidentInfo, now: datetime) -> l
     ]
 
 
-async def _open_actions(session: AsyncSession, info: IncidentInfo) -> list[dict[str, Any]]:
+async def _recent_answers(
+    session: AsyncSession, info: IncidentInfo, now: datetime
+) -> list[dict[str, Any]]:
     rows = (
         await session.execute(
-            select(StoreAction.title, StoreAction.expected_response, StoreAction.status)
+            select(
+                StoreAction.title,
+                StoreActionResponse.answer_yes_no,
+                StoreActionResponse.response_text,
+                StoreActionResponse.created_at,
+            )
+            .join(StoreActionResponse, StoreActionResponse.action_id == StoreAction.id)
             .where(
                 StoreAction.incident_id == info.id,
-                StoreAction.status.in_((ActionStatus.OPEN, ActionStatus.RESPONDED)),
+                StoreActionResponse.created_at >= now - RECENT_ANSWERS,
             )
-            .order_by(StoreAction.created_at)
+            .order_by(StoreActionResponse.created_at)
         )
     ).all()
     return [
-        {"title": row.title, "expected_response": row.expected_response, "status": row.status}
+        {
+            "action": row.title,
+            "answer_yes_no": row.answer_yes_no,
+            "answer_text": clip(row.response_text, MAX_TEXT) if row.response_text else None,
+            "answered_at_local": local_text(row.created_at, info.timezone),
+        }
         for row in rows
     ]
 
@@ -279,45 +387,45 @@ async def build_context(
     session: AsyncSession,
     info: IncidentInfo,
     entry: ClaimedEntry,
-    plan: Plan,
+    task: Task,
     now: datetime,
+    open_action: OpenAction | None,
 ) -> dict[str, Any]:
-    incident = {
-        "number": info.number,
-        "title": info.short_description,
-        "description": _short(info.description),
-        "symptom": info.u_symptom,
-        "category": info.category,
-        "priority": info.priority,
-        "state": state_label(info.state),
-        "on_hold_reason": info.hold_reason,
-        "expected_fix_local": (
-            local_text(info.u_resolution_eta, info.timezone) if info.u_resolution_eta else None
-        ),
-        "status_note": info.u_eta_note,
-    }
-    context: dict[str, Any] = {
-        "incident": incident,
-        "main_ci": await _main_ci(session, info),
-        "store": _store(info, now),
+    main_ci = await _main_ci(session, info)
+    common = {
+        "main_ci": main_ci,
+        "store": store_facts(info.store_name, info.timezone, info.business_hours, now),
         "assignment_group": {"name": info.group_name, "description": info.group_description},
-        "recent_store_comments": await _comments(session, info, entry),
-        "upcoming_visits": await _visits(session, info, now),
+        "comments": await _comments(session, info, entry),
     }
-    if plan.route == Route.CLASSIFY:
-        if plan.is_resolution:
-            kind = "resolution"
-        elif entry.element == JournalElement.COMMENTS:
-            kind = "comment"
-        else:
-            kind = "work_note"
-        trigger: dict[str, Any] = {
-            "type": kind,
-            "text": clip(entry.value, 1500),
-            "written_at_local": local_text(entry.created_at, info.timezone),
+    if task == Task.ASSESS_IMPACT:
+        criticality = main_ci.get("business_criticality") if main_ci else None
+        return assemble_context(
+            task=task,
+            incident=incident_facts(info, with_eta=False),
+            severities=allowed_severities(info.priority, criticality),
+            **common,
+        )
+    trigger: dict[str, Any] = {
+        "type": TRIGGER_TYPES[task],
+        "text": clip(entry.value, MAX_TRIGGER),
+        "written_at_local": local_text(entry.created_at, info.timezone),
+    }
+    if task == Task.CONFIRM_FIX:
+        trigger["close_code"] = info.close_code
+    waiting = None
+    if open_action is not None:
+        waiting = {
+            "title": open_action.title,
+            "expected_response": open_action.expected_response,
+            "waiting_since_local": local_text(open_action.created_at, info.timezone),
         }
-        if plan.is_resolution:
-            trigger["close_code"] = info.close_code
-        context["trigger"] = trigger
-        context["open_actions"] = await _open_actions(session, info)
-    return context
+    return assemble_context(
+        task=task,
+        incident=incident_facts(info, with_eta=True),
+        trigger=trigger,
+        open_action=waiting,
+        recent_answers=await _recent_answers(session, info, now),
+        visits=await _visits(session, info, now),
+        **common,
+    )
