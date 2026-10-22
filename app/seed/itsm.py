@@ -1,5 +1,6 @@
 # app/seed/itsm.py
-"""Seed part 2: incidents, their journal entries and appointments.
+"""Seed part 2: incidents, their journal entries, appointments and the
+"New Appointment" store notification of each appointment.
 
 build_itsm() is pure: seed files + anchor in, rows out. write_itsm() replaces
 the ITSM data inside the caller's transaction.
@@ -8,7 +9,9 @@ The seed writes rows directly (not through the services) so it can backdate
 everything and be re-run safely, but it writes exactly what the services would:
     - a system "Incident created." entry at opened_at for every incident,
     - the close notes as a work note at resolved_at for a resolved incident,
-    - every journal entry "pending", so the worker (Phase 9) processes them.
+    - every journal entry "pending", so the worker (Phase 9) processes them,
+    - one appointment_scheduled notification per appointment, from the same
+      template the appointment service uses, published at booked_at.
 
 Re-running replaces all ITSM data and everything derived from it (alerts,
 actions, AI runs, incident and appointment notifications), giving a clean demo.
@@ -42,12 +45,16 @@ from app.models.values import (
     JournalElement,
     JournalProcessStatus,
     JournalSource,
+    NotificationSource,
+    NotificationStatus,
+    SystemEvent,
 )
 from app.seed import ids
 from app.seed.anchor import parse_offset
 from app.seed.db import insert_many
 from app.seed.itsm_schemas import AppointmentSeed, IncidentSeed
-from app.seed.loader import SeedData
+from app.seed.loader import SeedData, SeedDataError
+from app.services.notification_templates import appointment_scheduled
 
 CREATED_ENTRY_TEXT = "Incident created."
 SEED_CREATED_BY = "seed"
@@ -63,6 +70,10 @@ def journal_id(number: str, position: int) -> uuid.UUID:
 
 def appointment_id(key: str) -> uuid.UUID:
     return uuid.uuid5(ids.RIC_NAMESPACE, f"appointment:{key}")
+
+
+def appointment_notification_id(key: str) -> uuid.UUID:
+    return uuid.uuid5(ids.RIC_NAMESPACE, f"notification:appointment:{key}")
 
 
 def next_local_time(anchor: datetime, tz: ZoneInfo, hhmm: str, day: str = "today") -> datetime:
@@ -81,6 +92,8 @@ class ItsmRows:
     incidents: list[dict[str, Any]] = field(default_factory=list)
     journal: list[dict[str, Any]] = field(default_factory=list)
     appointments: list[dict[str, Any]] = field(default_factory=list)
+    notifications: list[dict[str, Any]] = field(default_factory=list)
+    notification_targets: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _journal_row(
@@ -128,9 +141,9 @@ def _incident_rows(
         "cmdb_ci_network_element_id": (
             ids.network_element_id(site, incident.ci_element) if incident.ci_element else None
         ),
-        "cmdb_ci_device_id": ids.device_id(site, incident.ci_device)
-        if incident.ci_device
-        else None,
+        "cmdb_ci_device_id": (
+            ids.device_id(site, incident.ci_device) if incident.ci_device else None
+        ),
         "contact_type": str(incident.contact_type),
         "caller": incident.caller,
         "opened_by": incident.opened_by,
@@ -212,6 +225,60 @@ def _appointment_row(
     }
 
 
+def _appointment_notice(
+    appointment: AppointmentSeed,
+    row: dict[str, Any],
+    incident: IncidentSeed,
+    tz: ZoneInfo,
+    anchor: datetime,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    booked = anchor + parse_offset(appointment.booked_at)
+    if booked < anchor + parse_offset(incident.opened_at):
+        raise SeedDataError(
+            f"appointments.yaml: {appointment.key}: booked_at is before its incident opened"
+        )
+    content = appointment_scheduled(
+        title=row["title"],
+        purpose=row["purpose"],
+        details=row["details"],
+        start=row["scheduled_start"],
+        end=row["scheduled_end"],
+        incident_number=incident.number,
+        tz=tz,
+        publish_at=booked,
+    )
+    notification_id = appointment_notification_id(appointment.key)
+    notification = {
+        "id": notification_id,
+        "category": content.category,
+        "title": content.title,
+        "description": content.description,
+        "link_url": None,
+        "source": NotificationSource.SYSTEM,
+        "system_event": SystemEvent.APPOINTMENT_SCHEDULED,
+        "created_by": SEED_CREATED_BY,
+        "incident_id": row["incident_id"],
+        "appointment_id": row["id"],
+        "action_id": None,
+        "source_journal_id": None,
+        "status": NotificationStatus.PUBLISHED,
+        "publish_at": booked,
+        "expires_at": content.expires_at,
+        "withdrawn_at": None,
+        "withdrawn_by": None,
+        "created_at": booked,
+    }
+    target = {
+        "notification_id": notification_id,
+        "store_id": row["store_id"],
+        "delivered_at": None,
+        "read_at": None,
+        "read_by": None,
+        "created_at": booked,
+    }
+    return notification, target
+
+
 def build_itsm(data: SeedData, anchor: datetime) -> ItsmRows:
     zones = {s.site_code: ZoneInfo(s.timezone) for s in data.stores.stores}
     by_number = {i.number: i for i in data.incidents.incidents}
@@ -222,9 +289,12 @@ def build_itsm(data: SeedData, anchor: datetime) -> ItsmRows:
         rows.journal.extend(journal)
     for appointment in data.appointments.appointments:
         incident = by_number[appointment.incident]
-        rows.appointments.append(
-            _appointment_row(appointment, incident, zones[incident.site], anchor)
-        )
+        tz = zones[incident.site]
+        row = _appointment_row(appointment, incident, tz, anchor)
+        rows.appointments.append(row)
+        notification, target = _appointment_notice(appointment, row, incident, tz, anchor)
+        rows.notifications.append(notification)
+        rows.notification_targets.append(target)
     return rows
 
 
@@ -263,3 +333,5 @@ async def write_itsm(session: AsyncSession, rows: ItsmRows) -> None:
     await insert_many(session, Incident, rows.incidents)
     await insert_many(session, IncidentJournal, rows.journal)
     await insert_many(session, Appointment, rows.appointments)
+    await insert_many(session, Notification, rows.notifications)
+    await insert_many(session, NotificationTarget, rows.notification_targets)

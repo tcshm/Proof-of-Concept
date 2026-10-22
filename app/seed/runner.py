@@ -27,6 +27,7 @@ from app.seed.inventory import build_inventory, write_inventory
 from app.seed.itsm import build_itsm, write_itsm
 from app.seed.loader import SeedData
 from app.seed.master import write_master
+from app.seed.notifications import load_announcements, write_announcements
 
 
 class SeedDependencyError(RuntimeError):
@@ -102,7 +103,8 @@ async def seed_network(session: AsyncSession, data: SeedData, anchor: datetime) 
 
 
 async def seed_itsm(session: AsyncSession, data: SeedData, anchor: datetime) -> str:
-    """Replace incidents, journal entries and appointments (all journal entries pending)."""
+    """Replace incidents, journal entries (all pending), appointments and the
+    appointment notifications."""
     groups = await session.scalar(select(func.count()).select_from(AssignmentGroup))
     await _require(
         session, "assignment groups", groups or 0, len(data.master.assignment_groups), "master"
@@ -119,8 +121,21 @@ async def seed_itsm(session: AsyncSession, data: SeedData, anchor: datetime) -> 
     await write_itsm(session, rows)
     return (
         f"{len(rows.incidents)} incidents, {len(rows.journal)} journal entries (pending), "
-        f"{len(rows.appointments)} appointments"
+        f"{len(rows.appointments)} appointments, "
+        f"{len(rows.notifications)} appointment notifications"
     )
+
+
+async def seed_notifications(session: AsyncSession, data: SeedData, anchor: datetime) -> str:
+    """Replace the seeded portal announcements (seed/data/notifications.yaml)."""
+    store_ids = [ids.store_id(s.site_code) for s in data.stores.stores]
+    stores = await session.scalar(
+        select(func.count()).select_from(Store).where(Store.id.in_(store_ids))
+    )
+    await _require(session, "stores", stores or 0, len(store_ids), "master")
+
+    notifications, targets = await write_announcements(session, load_announcements(), anchor)
+    return f"{notifications} portal notifications, {targets} store targets"
 
 
 Step = Callable[[AsyncSession, SeedData, datetime], Awaitable[str]]
@@ -131,5 +146,6 @@ STEPS: dict[str, Step] = {
     "events": seed_events,
     "network": seed_network,
     "itsm": seed_itsm,
+    "notifications": seed_notifications,
 }
-STEP_ORDER = ("master", "inventory", "events", "network", "itsm")
+STEP_ORDER = ("master", "inventory", "events", "network", "itsm", "notifications")

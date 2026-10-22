@@ -16,6 +16,8 @@ from app.models import (
     IncidentJournal,
     NetworkElement,
     NetworkElementType,
+    Notification,
+    NotificationTarget,
     RawNetworkEvent,
     Store,
 )
@@ -32,6 +34,8 @@ _TABLES = (
     Incident,
     IncidentJournal,
     Appointment,
+    Notification,
+    NotificationTarget,
 )
 
 
@@ -91,4 +95,16 @@ async def collect_summary(session: AsyncSession) -> list[str]:
     ).all()
     for element, status, count in journal:
         lines.append(f"  {element:<26} {status:<10} {count:>5}")
+
+    lines.append("")
+    lines.append("Notifications by source and status:")
+    notifications = (
+        await session.execute(
+            select(Notification.source, Notification.status, func.count())
+            .group_by(Notification.source, Notification.status)
+            .order_by(Notification.source, Notification.status)
+        )
+    ).all()
+    for source, status, count in notifications:
+        lines.append(f"  {source:<26} {status:<10} {count:>5}")
     return lines

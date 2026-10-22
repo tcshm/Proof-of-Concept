@@ -110,6 +110,7 @@ class AppointmentSeed(SeedModel):
     day: Literal["today", "tomorrow"]
     at_local: LocalTime
     duration_minutes: Annotated[int, Field(ge=15, le=480)]
+    booked_at: Offset  # when IT booked the visit: the "appointment scheduled" notice time
     vendor_name: str | None = None
     technician_name: str | None = None
 

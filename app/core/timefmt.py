@@ -106,3 +106,13 @@ def is_open(business_hours: dict[str, Any], tz: ZoneInfo, now: datetime) -> bool
     intervals = business_hours.get(_DAY_KEYS[local.weekday()]) or []
     current = local.strftime("%H:%M")
     return any(start <= current < end for start, end in intervals)
+
+
+def format_absolute(value: datetime, tz: ZoneInfo) -> str:
+    """Absolute store-local time for stored text: 'Tue 13 Oct at 1:00 PM IST'.
+
+    Used in notification text, which is stored and must not say "Today".
+    """
+    local = to_local(value, tz)
+    day = f"{_DAY_NAMES[local.weekday()]} {local.day} {_MONTH_NAMES[local.month - 1]}"
+    return f"{day} at {clock_time(value, tz)} {tz_abbreviation(value, tz)}"

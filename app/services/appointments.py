@@ -8,8 +8,9 @@ mobile app. Rules:
     - the visit must start in the future and end after it starts,
     - only scheduled visits can be rescheduled; cancelling needs a note.
 
-Phase 7 adds the store notification for scheduled / rescheduled / cancelled
-visits, written in the same transaction (see the "Phase 7" markers).
+Scheduling, rescheduling and cancelling write the store notification in the
+SAME transaction (Phase 7), so a visit is never booked without the store being
+told. Status updates (in progress, completed, no-show) send no notification.
 """
 
 from __future__ import annotations
@@ -30,10 +31,12 @@ from app.models.values import (
     AppointmentStatus,
     AppointmentType,
     AuditAction,
+    SystemEvent,
 )
 from app.services.audit import diff, record_audit
 from app.services.incident_rules import state_label
 from app.services.incidents import lock_incident
+from app.services.notifications import notify_appointment
 
 # from-status -> statuses update_appointment_status may move to.
 _STATUS_MOVES: dict[str, frozenset[str]] = {
@@ -160,7 +163,7 @@ async def create_appointment(
             **diff({}, _snapshot(appointment), ["status", "scheduled_start", "scheduled_end"]),
         },
     )
-    # Phase 7: write the "appointment scheduled" store notification here.
+    await notify_appointment(session, actor, appointment, SystemEvent.APPOINTMENT_SCHEDULED, now)
     await _finish(session, commit)
     return appointment
 
@@ -183,6 +186,7 @@ async def reschedule_appointment(
     _check_times(scheduled_start, scheduled_end, now)
     await _require_active_incident(session, appointment.incident_id)
     before = _snapshot(appointment)
+    old_start = appointment.scheduled_start
     appointment.scheduled_start = scheduled_start
     appointment.scheduled_end = scheduled_end
     record_audit(
@@ -194,7 +198,14 @@ async def reschedule_appointment(
         store_id=appointment.store_id,
         changes=diff(before, _snapshot(appointment)),
     )
-    # Phase 7: write the "appointment rescheduled" store notification here.
+    await notify_appointment(
+        session,
+        actor,
+        appointment,
+        SystemEvent.APPOINTMENT_RESCHEDULED,
+        now,
+        old_start=old_start,
+    )
     await _finish(session, commit)
     return appointment
 
@@ -225,7 +236,7 @@ async def cancel_appointment(
         store_id=appointment.store_id,
         changes=diff(before, _snapshot(appointment)),
     )
-    # Phase 7: write the "appointment cancelled" store notification here.
+    await notify_appointment(session, actor, appointment, SystemEvent.APPOINTMENT_CANCELLED, now)
     await _finish(session, commit)
     return appointment
 

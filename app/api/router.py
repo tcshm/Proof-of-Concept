@@ -9,7 +9,15 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.api.routes import appointments, devices, incidents, network, store
+from app.api.routes import (
+    appointments,
+    devices,
+    incidents,
+    network,
+    notifications,
+    portal_notifications,
+    store,
+)
 
 API_PREFIX = "/api/v1"
 
@@ -19,3 +27,5 @@ api_router.include_router(network.router)
 api_router.include_router(devices.router)
 api_router.include_router(incidents.router)
 api_router.include_router(appointments.router)
+api_router.include_router(notifications.router)
+api_router.include_router(portal_notifications.router)

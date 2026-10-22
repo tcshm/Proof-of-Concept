@@ -52,6 +52,7 @@ from app.models.values import (
     JournalElement,
     JournalProcessStatus,
     JournalSource,
+    SystemEvent,
 )
 from app.services.audit import diff, record_audit
 from app.services.incident_rules import (
@@ -60,6 +61,7 @@ from app.services.incident_rules import (
     journal_process_status,
     state_label,
 )
+from app.services.notifications import notify_appointment
 
 INCIDENT_NUMBER_SEQUENCE = "incident_number_seq"
 CREATED_ENTRY_TEXT = "Incident created."
@@ -317,32 +319,41 @@ async def _close_actions(
 
 
 async def _cancel_appointments(
-    session: AsyncSession, actor: ActorContext, incident: Incident, note: str
+    session: AsyncSession,
+    actor: ActorContext,
+    incident: Incident,
+    note: str,
+    now: datetime,
 ) -> None:
-    rows = (
-        await session.execute(
-            update(Appointment)
+    """Cancel the incident's open visits and tell the store about each one."""
+    appointments = (
+        await session.scalars(
+            select(Appointment)
             .where(
                 Appointment.incident_id == incident.id,
                 Appointment.status.in_(
                     (AppointmentStatus.SCHEDULED, AppointmentStatus.IN_PROGRESS)
                 ),
             )
-            .values(status=AppointmentStatus.CANCELLED, status_note=note)
-            .returning(Appointment.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
         )
     ).all()
-    for (appointment_id,) in rows:
+    for appointment in appointments:
+        appointment.status = AppointmentStatus.CANCELLED
+        appointment.status_note = note
         record_audit(
             session,
             actor,
             action=AuditAction.STATUS_CHANGE,
             entity_type="appointments",
-            entity_id=appointment_id,
+            entity_id=appointment.id,
             store_id=incident.store_id,
             changes={"status": {"new": "cancelled"}, "status_note": note},
         )
-        # Phase 7: write the "appointment cancelled" store notification here.
+        await notify_appointment(
+            session, actor, appointment, SystemEvent.APPOINTMENT_CANCELLED, now
+        )
 
 
 # --- operations ----------------------------------------------------------------------
@@ -567,7 +578,7 @@ async def close_incident(
     incident.closed_at = now
     await _close_alert(session, actor, incident, AlertCloseReason.INCIDENT_RESOLVED, now)
     await _close_actions(session, actor, incident, now)
-    await _cancel_appointments(session, actor, incident, "Incident closed")
+    await _cancel_appointments(session, actor, incident, "Incident closed", now)
     record_audit(
         session,
         actor,
@@ -603,7 +614,7 @@ async def cancel_incident(
     incident.close_notes = note
     await _close_alert(session, actor, incident, AlertCloseReason.INCIDENT_CANCELED, now)
     await _close_actions(session, actor, incident, now)
-    await _cancel_appointments(session, actor, incident, "Incident cancelled")
+    await _cancel_appointments(session, actor, incident, "Incident cancelled", now)
     record_audit(
         session,
         actor,

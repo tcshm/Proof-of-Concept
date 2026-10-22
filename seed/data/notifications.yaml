@@ -1,0 +1,94 @@
+# seed/data/notifications.yaml
+# Portal announcements, published through the notification service exactly as
+# the admin portal would. The portal turns "all stores" or a region into an
+# explicit list of site codes; here all_stores / region / sites do the same.
+#
+# publish_offset_minutes: minutes from the anchor (the seed run time); negative =
+# already published, positive = scheduled for later. expires_after_hours counts
+# from the publish time (the portal's end time).
+#
+# Mobile mock data (store 01234): n-001, n-002, n-008, n-009, n-010 and n-011 are
+# here. n-004 and n-005 are the "New Appointment" notices written with the
+# appointments (itsm step). n-003, n-006 and n-007 are incident notices that the
+# worker creates from the journal in Phase 9.
+
+notifications:
+  - key: "n-001"
+    category: "maintenance"
+    title: "Network maintenance activity scheduled tonight at 1 AM - No action needed from stores"
+    description: "Planned maintenance window tonight at 1 AM. No action is needed from stores at this time."
+    all_stores: true
+    publish_offset_minutes: -1
+    expires_after_hours: 24
+
+  - key: "n-002"
+    category: "updates"
+    title: "Deployment for curbside application planned on 6th Dec - No action needed from stores"
+    description: "A new curbside app build will be rolled out. Store staff need not take action."
+    all_stores: true
+    publish_offset_minutes: -15
+
+  - key: "n-008"
+    category: "updates"
+    title: "Policy Update: New IT Security Guidelines"
+    description: "Policy is updated for new security guideline. Please refer to the link for more details."
+    link_url: "https://sharepoint.contoso.com/sites/IT/Security-Guidelines"
+    all_stores: true
+    publish_offset_minutes: -5760
+    read_by_sites: ["01234"]
+
+  - key: "n-009"
+    category: "others"
+    title: "Store Manager Message: Team Meeting at 3PM"
+    description: "Store manager has scheduled a team meeting today at 3 PM. Please ensure attendance and review agenda beforehand."
+    sites: ["01234"]
+    publish_offset_minutes: -1440
+    expires_after_hours: 48
+
+  - key: "n-010"
+    category: "training"
+    title: "Training Module Available: Network Basics"
+    description: "A new training module on Network Basics is now available on the learning portal. Please complete it by the end of the week."
+    all_stores: true
+    publish_offset_minutes: -2880
+    read_by_sites: ["01234"]
+
+  - key: "n-011"
+    category: "updates"
+    title: "Software update tonight for mobile devices"
+    description: "Software update will happen tonight to all the mobile devices due to device maintenance, so check the performance of the device tomorrow."
+    all_stores: true
+    publish_offset_minutes: -3120
+    read_by_sites: ["01234"]
+
+  # --- region and lifecycle examples ----------------------------------------------
+  - key: "pos-rollout-india"
+    category: "updates"
+    title: "POS software update for India stores this Sunday"
+    description: "POS terminals in India stores will receive a software update this Sunday before opening. Please keep all terminals powered on overnight on Saturday."
+    region: "India"
+    publish_offset_minutes: -360
+
+  - key: "maintenance-scheduled"
+    category: "maintenance"
+    title: "Wi-Fi controller upgrade tomorrow at 2 AM - No action needed from stores"
+    description: "Store Wi-Fi may drop for up to 10 minutes during the upgrade window tomorrow at 2 AM."
+    all_stores: true
+    publish_offset_minutes: 360
+    expires_after_hours: 24
+
+  - key: "expired-notice"
+    category: "maintenance"
+    title: "Payment gateway maintenance completed"
+    description: "The payment gateway maintenance has been completed successfully."
+    all_stores: true
+    publish_offset_minutes: -4320
+    expires_after_hours: 24
+
+  - key: "withdrawn-notice"
+    category: "others"
+    title: "Store closing time change (sent in error)"
+    description: "This notice was sent in error and has been withdrawn."
+    all_stores: true
+    publish_offset_minutes: -180
+    withdrawn: true
