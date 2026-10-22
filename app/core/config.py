@@ -68,6 +68,20 @@ class Settings(BaseSettings):
     # Run the one live LLM test (tests/test_llm_live.py) against the real provider.
     llm_live_test: bool = False
 
+    # --- Worker (Phase 9) ------------------------------------------------------------
+    # Seconds to wait when no journal entry is due.
+    worker_poll_seconds: float = Field(default=5.0, ge=0.5, le=300)
+    # Free-tier quota: at most this many LLM calls per minute (calls are spaced evenly).
+    worker_max_calls_per_minute: int = Field(default=20, ge=1, le=600)
+    # Attempts per journal entry before it fails (impact assessment: template alert).
+    worker_max_attempts: int = Field(default=3, ge=1, le=10)
+    # Minutes to wait before attempt 2, 3, ... (comma-separated; the last value repeats).
+    worker_retry_delays_minutes: str = "2,10"
+    # After an HTTP 429 (rate limit), no LLM call for this many seconds.
+    worker_rate_limit_pause_seconds: float = Field(default=60.0, ge=0, le=3600)
+    # How often the running worker expires overdue store actions.
+    worker_sweep_seconds: float = Field(default=60.0, ge=5, le=3600)
+
     @field_validator("database_url")
     @classmethod
     def _require_asyncpg(cls, value: str) -> str:

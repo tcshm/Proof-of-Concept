@@ -46,6 +46,8 @@ uv run uvicorn app.main:app --reload      # http://localhost:8000
 | `GET /api/v1/incidents` | The store's active incidents (states 1-3), highest severity first, then newest |
 | `GET /api/v1/incidents/{number}` | One incident (any state) with its store-visible comments |
 | `GET /api/v1/appointments` | Upcoming visits (scheduled or in progress, not yet over), soonest first |
+| `GET /api/v1/alerts` | Active alerts (one per open incident), critical first, newest first |
+| `GET /api/v1/actions` | Open actions not yet overdue, soonest due first, with `dueByText` in store time |
 | `GET /api/v1/notifications` | The store's live notifications, newest first (`?limit=`, default 50, max 200); marks them delivered |
 | `GET /api/v1/notifications/unread-count` | `{"unreadCount": n}` for the app's badge |
 | `POST /api/v1/notifications/{id}/read` | Mark one notification read (reading again keeps the first read time) |
@@ -174,6 +176,39 @@ The worker, the seed and later the MCP servers call the same queries and service
   `LLM_LIVE_TEST=true`.
 - On NVIDIA's free tier, inputs and outputs may be recorded by NVIDIA: use mock data only.
 
+## Worker: alerts, actions and incident notifications
+
+The worker (`app/worker/`, run with `scripts.worker`) turns pending incident journal entries into
+store-facing messages with the two LLM workflows. It is a separate process from the API.
+
+| Pending entry | Workflow | Result |
+|---|---|---|
+| `system` "Incident created." (active incident) | Impact assessment | One store alert per incident (no notification) |
+| IT work note or comment | Update classification | action (+ "Action Required" notification), notify ("Incident ... Updated" notification) or none |
+| Close notes of a resolved incident | Update classification (resolution) | Usually a yes/no "confirm the fix" action |
+
+- Skipped without an LLM call: "created" entries of incidents no longer active, notes written before
+  the incident was resolved, anything on closed or cancelled incidents, entries not written by IT.
+- A comment is IT writing to the store: it is always sent (as written). A work note is internal:
+  the store sees the model's store-friendly rewrite, or nothing.
+- Alerts, actions and notifications take the journal entry's time, so seeded data keeps its timeline.
+- Every call is recorded in `ai_workflow_runs`. Errors: unavailable or invalid answers are retried
+  (`WORKER_RETRY_DELAYS_MINUTES`); a rejected request (bad key or model) is not retried. After the
+  last attempt an impact assessment writes a template alert (run `needs_review`) so a store never
+  misses an outage; a classification is marked `failed`.
+- Entries of one incident are handled in order; claiming uses `FOR UPDATE SKIP LOCKED`.
+- Open actions past their due time are closed as `expired` (every `WORKER_SWEEP_SECONDS`), and
+  `/actions` never shows them.
+- Free-tier quotas: at most `WORKER_MAX_CALLS_PER_MINUTE` calls (default 20), a pause after HTTP 429,
+  and `--max-calls` to cap a drain. A full drain of the seed data makes about 26 calls.
+
+```powershell
+uv run python -m scripts.seed all                  # reset the demo data (all entries pending)
+uv run python -m scripts.worker --drain            # process everything pending, then stop
+uv run python -m scripts.worker --drain --max-calls 5
+uv run python -m scripts.worker                    # keep running (Ctrl+C to stop)
+```
+
 ## Network event processing
 
 Raw Aruba events (`raw_network_events`) are turned into `network_events` (typed history) and
@@ -212,6 +247,7 @@ uv run python -m scripts.process_events --rebuild --as-of 2026-10-13T09:00:00Z
 | `uv run python -m scripts.seed notifications` | Reset the seeded portal announcements |
 | `uv run python -m scripts.process_events --rebuild` | Rebuild the network status from the raw events |
 | `uv run python -m scripts.llm_check` | One test call to the configured LLM provider (`--fallback` for the fallback) |
+| `uv run python -m scripts.worker --drain` | Process all pending journal entries with the LLM, then stop (uses LLM quota) |
 | `uv run python -m scripts.request_log_tail` | Show the last API requests (`-n 50`, `--site 01234`) |
 
 ## Seed data
@@ -265,6 +301,7 @@ uv run python -m scripts.process_events --rebuild --as-of 2026-10-13T09:00:00Z
 | `app/queries/` | Read-side SQL for the API, one module per screen, always filtered by store |
 | `app/services/` | Business services, the only code that writes business tables: incidents, appointments, notifications, audit |
 | `app/llm/` | LLM layer: providers (NVIDIA NIM, Groq, Azure AI Foundry, fake), fallback, validation, prompts, run records |
+| `app/worker/` | The worker: queue, routing rules, LLM context, loop with pacing, retries and action expiry |
 | `app/processing/` | Network event processor: Aruba extractors, matching, status rules, runs |
 | `app/db/` | Engine, sessions, Alembic helper |
 | `app/models/` | SQLAlchemy models and allowed value lists |

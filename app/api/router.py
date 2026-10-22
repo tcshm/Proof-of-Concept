@@ -10,6 +10,8 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.api.routes import (
+    actions,
+    alerts,
     appointments,
     devices,
     incidents,
@@ -27,5 +29,7 @@ api_router.include_router(network.router)
 api_router.include_router(devices.router)
 api_router.include_router(incidents.router)
 api_router.include_router(appointments.router)
+api_router.include_router(alerts.router)
+api_router.include_router(actions.router)
 api_router.include_router(notifications.router)
 api_router.include_router(portal_notifications.router)
